@@ -410,6 +410,25 @@ async fn call_jev(api_key: &str, base_url: &str, request: Value) -> Result<Value
         .map_err(|e| AppError::message(format!("jEV response decode failed: {e}")))
 }
 
+/// Lightweight health probe: send one tiny `score` question to verify key/endpoint.
+pub async fn jev_probe_health(api_key: &str, base_url: &str) -> Result<(), AppError> {
+    if api_key.is_empty() {
+        return Err(AppError::message("jEV API key is not configured"));
+    }
+    let request = serde_json::json!({
+        "state": { "paper_title": "probe" },
+        "model": JEV_MODEL,
+        "questions": {
+            "health_score": {
+                "type": "score",
+                "instructions": "Sanity check: does the state contain a paper_title?",
+                "criteria": ["No", "Maybe", "Yes"],
+            }
+        }
+    });
+    call_jev(api_key, base_url, request).await.map(|_| ())
+}
+
 /// Extract highlights for one paper by calling jEV and locating each chosen quote in the PDF.
 pub async fn jev_suggest_highlights_for_paper(
     paper_dir: &Path,

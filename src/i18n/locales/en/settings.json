@@ -560,6 +560,14 @@
 			},
 			"baseUrl": {
 				"label": "Endpoint URL"
+			},
+			"test": "Test connection",
+			"probeStatus": {
+				"idle": "Not tested yet",
+				"probing": "Testing…",
+				"ok": "Reachable",
+				"failed": "Unreachable",
+				"unconfigured": "API key required"
 			}
 		}
 	},

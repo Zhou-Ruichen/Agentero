@@ -23,6 +23,22 @@ pub struct JevSuggestHighlightsResult {
     pub highlights: Vec<SuggestedHighlight>,
 }
 
+#[tauri::command]
+#[specta::specta]
+pub async fn jev_probe_health(store: State<'_, AppSettingsStore>) -> Result<ApiResult<()>, String> {
+    let settings = match store.get() {
+        Ok(s) => s,
+        Err(err) => return Ok(map_err(err)),
+    };
+    let api_key = settings.settings.jev.api_key;
+    let base_url = settings.settings.jev.base_url;
+
+    match crate::features::jev::service::jev_probe_health(&api_key, &base_url).await {
+        Ok(()) => Ok(ApiResult::ok(())),
+        Err(err) => Ok(map_err(err)),
+    }
+}
+
 fn read_title_from_sidecar(paper_dir: &Path) -> Option<String> {
     let raw = std::fs::read_to_string(paper_dir.join("metadata.json")).ok()?;
     let json: serde_json::Value = serde_json::from_str(&raw).ok()?;

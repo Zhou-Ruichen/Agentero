@@ -560,6 +560,14 @@
 			},
 			"baseUrl": {
 				"label": "接口地址"
+			},
+			"test": "测试连接",
+			"probeStatus": {
+				"idle": "尚未测试",
+				"probing": "测试中…",
+				"ok": "可用",
+				"failed": "不可用",
+				"unconfigured": "需要填写 API key"
 			}
 		}
 	},

@@ -231,6 +231,7 @@ fn export_typescript_bindings() {
             crate::features::compile::root::resolve_latex_root,
             crate::features::jobs::commands::job_latex_compile_enqueue,
             crate::features::jev::commands::jev_suggest_highlights,
+            crate::features::jev::commands::jev_probe_health,
         ])
         // Desktop event surface (see `app::events_contract`): emit sites keep
         // using `app.emit("<literal>", payload)`; the wrappers/mirrors there

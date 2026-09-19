@@ -142,9 +142,9 @@ const NAV: {
 	{ id: "agent", icon: Bot, dividerBefore: true },
 	{ id: "translate", icon: Languages },
 	{ id: "layout", icon: LayoutTemplate },
-	{ id: "experimental", icon: FlaskConical },
 	{ id: "remote-access", icon: MonitorSmartphone },
 	{ id: "sync", icon: CloudUpload },
+	{ id: "experimental", icon: FlaskConical },
 	{ id: "doctor", icon: Stethoscope, dividerBefore: true },
 	{ id: "keyboard", icon: Keyboard },
 	{ id: "about", icon: Info },
@@ -551,17 +551,6 @@ export function SettingsContent({
 							</Suspense>
 						</div>
 					)}
-					{visitedSections.includes("experimental") && (
-						<div
-							data-settings-pane
-							data-active={section === "experimental" ? "true" : "false"}
-							hidden={section !== "experimental"}
-						>
-							<Suspense fallback={<PaneFallback />}>
-								<ExperimentalPane settings={settings} patch={patch} />
-							</Suspense>
-						</div>
-					)}
 					{visitedSections.includes("doctor") && (
 						<div
 							data-settings-pane
@@ -603,6 +592,17 @@ export function SettingsContent({
 						>
 							<Suspense fallback={<PaneFallback />}>
 								<SyncPane vaultPath={vaultPath} />
+							</Suspense>
+						</div>
+					)}
+					{visitedSections.includes("experimental") && (
+						<div
+							data-settings-pane
+							data-active={section === "experimental" ? "true" : "false"}
+							hidden={section !== "experimental"}
+						>
+							<Suspense fallback={<PaneFallback />}>
+								<ExperimentalPane settings={settings} patch={patch} />
 							</Suspense>
 						</div>
 					)}

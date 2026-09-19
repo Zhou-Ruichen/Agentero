@@ -226,6 +226,7 @@ pub fn attach_handlers(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<ta
             crate::features::compile::root::resolve_latex_root,
             crate::features::jobs::commands::job_latex_compile_enqueue,
             crate::features::jev::commands::jev_suggest_highlights,
+            crate::features::jev::commands::jev_probe_health,
         ])
     }
     #[cfg(target_os = "ios")]
