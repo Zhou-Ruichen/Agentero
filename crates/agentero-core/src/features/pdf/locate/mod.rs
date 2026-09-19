@@ -81,7 +81,7 @@ pub struct LocateResult {
 
 /// Rect normalized to 0–1 against the page box, top-left origin, y down —
 /// identical to what the viewer persists for ask/translate marks.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, specta::Type)]
 pub struct NormRect {
     pub x: f32,
     pub y: f32,

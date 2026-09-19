@@ -21,6 +21,7 @@ use std::sync::{Arc, Mutex};
 
 pub const DEFAULT_TRANSLATOR_BASE_URL: &str = "https://translation-server.agentero.app";
 pub const DEFAULT_NETWORK_PROXY_URL: &str = "http://127.0.0.1:7890";
+pub const DEFAULT_JEV_BASE_URL: &str = "https://api.typesafe.ai/v1/systemone";
 /// Built-in URL-prefix GitHub mirrors. The user picks from this list instead of
 /// typing a custom URL. All entries must support `{base}/{canonical_github_url}`.
 pub const GITHUB_MIRROR_PRESETS: &[&str] = &[
@@ -164,6 +165,8 @@ pub struct AppSettings {
     #[serde(default)]
     pub pdf_ask: PdfAskSettings,
     #[serde(default)]
+    pub jev: JevSettings,
+    #[serde(default)]
     pub embedding: EmbeddingSettings,
     #[serde(default)]
     pub translate: TranslateSettings,
@@ -196,6 +199,16 @@ pub struct PdfAskSettings {
     pub agent_id: String,
     #[serde(default)]
     pub model_id: String,
+}
+
+/// TypeSafe jEV (System One) settings for smart paper highlighting.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct JevSettings {
+    #[serde(default)]
+    pub api_key: String,
+    #[serde(default = "default_jev_base_url")]
+    pub base_url: String,
 }
 
 /// Embedding endpoint: the built-in provider, or a custom OpenAI-compatible
@@ -235,8 +248,13 @@ pub struct TranslateSettings {
     pub provider_configs: HashMap<String, TranslateProviderConfig>,
     #[serde(default)]
     pub auto_translate_selection: bool,
+    /// Deprecated: kept for migration. Use `display_mode` + `dual_pane_source`.
     #[serde(default)]
     pub dual_pane_translate: bool,
+    #[serde(default = "default_translate_display_mode")]
+    pub display_mode: String,
+    #[serde(default = "default_translate_dual_pane_source")]
+    pub dual_pane_source: String,
     #[serde(default)]
     pub agent_id: String,
     #[serde(default)]
@@ -257,6 +275,8 @@ impl Default for TranslateSettings {
             provider_configs: HashMap::new(),
             auto_translate_selection: false,
             dual_pane_translate: false,
+            display_mode: default_translate_display_mode(),
+            dual_pane_source: default_translate_dual_pane_source(),
             agent_id: String::new(),
             model_id: String::new(),
             custom_prompt: String::new(),
@@ -363,6 +383,7 @@ impl Default for AppSettings {
             ai_response_language: default_ai_response_language(),
             agent_personal_prompt: String::new(),
             pdf_ask: PdfAskSettings::default(),
+            jev: JevSettings::default(),
             embedding: EmbeddingSettings::default(),
             translate: TranslateSettings::default(),
             layout: LayoutSettings::default(),
@@ -384,6 +405,9 @@ fn default_translator_base_url() -> String {
 }
 fn default_network_proxy_url() -> String {
     DEFAULT_NETWORK_PROXY_URL.to_string()
+}
+fn default_jev_base_url() -> String {
+    DEFAULT_JEV_BASE_URL.to_string()
 }
 fn default_paper_tree_label_mode() -> String {
     "title-author".into()
@@ -463,6 +487,12 @@ fn default_translate_target() -> String {
 }
 fn default_translate_source() -> String {
     "auto".into()
+}
+fn default_translate_display_mode() -> String {
+    "overlay".into()
+}
+fn default_translate_dual_pane_source() -> String {
+    "pdf".into()
 }
 /// Layout analysis stays on the bundled offline PP-DocLayoutV3 model: it is
 /// free, local, and a cloud backend would bill every PDF for no gain. The
@@ -885,6 +915,9 @@ fn redact_secrets(mut settings: AppSettings) -> AppSettings {
     if !settings.easy_scholar_key.trim().is_empty() {
         settings.easy_scholar_key = mask_translate_api_key(&settings.easy_scholar_key);
     }
+    if !settings.jev.api_key.trim().is_empty() {
+        settings.jev.api_key = mask_translate_api_key(&settings.jev.api_key);
+    }
     settings
 }
 
@@ -918,6 +951,9 @@ fn merge_secrets(incoming: &mut AppSettings, previous: &AppSettings) {
     if is_translate_api_key_mask(&incoming.easy_scholar_key) {
         incoming.easy_scholar_key = previous.easy_scholar_key.clone();
     }
+    if is_translate_api_key_mask(&incoming.jev.api_key) {
+        incoming.jev.api_key = previous.jev.api_key.clone();
+    }
 }
 
 fn normalize(s: &mut AppSettings) {
@@ -934,6 +970,13 @@ fn normalize(s: &mut AppSettings) {
         .to_ascii_lowercase();
     s.mcp_tunnel_api_key = s.mcp_tunnel_api_key.trim().to_string();
     s.easy_scholar_key = s.easy_scholar_key.trim().to_string();
+    s.jev.api_key = s.jev.api_key.trim().to_string();
+    let jev_url = s.jev.base_url.trim().trim_end_matches('/');
+    s.jev.base_url = if jev_url.is_empty() {
+        default_jev_base_url()
+    } else {
+        jev_url.to_string()
+    };
     if s.batch_import_concurrency < 1 || s.batch_import_concurrency > 10 {
         s.batch_import_concurrency = default_batch_import_concurrency();
     }
