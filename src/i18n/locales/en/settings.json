@@ -553,7 +553,6 @@
 		"title": "Experimental features",
 		"jev": {
 			"section": "TypeSafe jEV smart highlights",
-			"description": "Enable AI-driven paper highlighting. Enter your jEV API key and endpoint below.",
 			"apiKey": {
 				"label": "API key",
 				"placeholder": "jEV API key"

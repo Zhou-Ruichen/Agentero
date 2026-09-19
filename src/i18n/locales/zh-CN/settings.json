@@ -553,7 +553,6 @@
 		"title": "实验功能",
 		"jev": {
 			"section": "TypeSafe jEV 智能高亮",
-			"description": "启用 AI 驱动的论文高亮。请在下方填写 jEV API key 和接口地址。",
 			"apiKey": {
 				"label": "API key",
 				"placeholder": "jEV API key"
