@@ -33,6 +33,17 @@ export type TranslateTargetLang = "ui" | "en" | "zh-CN";
 
 export type TranslateSourceLang = "auto";
 
+export type TranslationDisplayMode = "overlay" | "dualPane";
+
+export const TRANSLATION_DISPLAY_MODES: TranslationDisplayMode[] = [
+	"overlay",
+	"dualPane",
+];
+
+export type DualPaneSource = "pdf" | "latex";
+
+export const DUAL_PANE_SOURCES: DualPaneSource[] = ["pdf", "latex"];
+
 export type TranslateSettings = {
 	/** App-wide default provider. */
 	provider: TranslateProviderId;
@@ -47,10 +58,16 @@ export type TranslateSettings = {
 	/** PDF consumer: auto-run translate after selection (default off). */
 	autoTranslateSelection: boolean;
 	/**
-	 * Open a secondary window with the rendered full-document translation so the
-	 * original PDF stays on the left and the translation stays on the right.
+	 * How translated PDF content is displayed: overlay on top of the original
+	 * PDF, or in a secondary dual pane.
 	 */
-	dualPaneTranslate: boolean;
+	displayMode: TranslationDisplayMode;
+	/**
+	 * When displayMode is "dualPane", which source material to render in the
+	 * right pane: the existing PDF-layout translation, or a LaTeX-source
+	 * translation compiled to PDF.
+	 */
+	dualPaneSource: DualPaneSource;
 	/**
 	 * Agent seat for provider === "agent".
 	 * Empty = follow registry defaultId.
