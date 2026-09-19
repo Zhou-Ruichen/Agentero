@@ -601,6 +601,7 @@ export const commands = {
 	chktexLint: (texPath: string, content: string) => __TAURI_INVOKE<ApiResult<LatexLintDiagnostic[]>>("chktex_lint", { texPath, content }),
 	resolveLatexRoot: (texPath: string, vaultPath: string) => __TAURI_INVOKE<ApiResult<LatexRoot>>("resolve_latex_root", { texPath, vaultPath }),
 	jobLatexCompileEnqueue: (args: JobLatexCompileEnqueueArgs) => typedError<ApiResult<JobSnapshot>, string>(__TAURI_INVOKE("job_latex_compile_enqueue", { args })),
+	jevSuggestHighlights: (args: JevSuggestHighlightsArgs) => typedError<ApiResult<JevSuggestHighlightsResult>, string>(__TAURI_INVOKE("jev_suggest_highlights", { args })),
 };
 
 /** Events */
@@ -1464,6 +1465,7 @@ export type AppSettings_Deserialize = {
 	aiResponseLanguage?: string,
 	agentPersonalPrompt?: string,
 	pdfAsk?: PdfAskSettings,
+	jev?: JevSettings,
 	embedding?: EmbeddingSettings,
 	translate?: TranslateSettings,
 	layout?: LayoutSettings,
@@ -1545,6 +1547,7 @@ export type AppSettings_Serialize = {
 	aiResponseLanguage: string,
 	agentPersonalPrompt: string,
 	pdfAsk: PdfAskSettings,
+	jev: JevSettings,
 	embedding: EmbeddingSettings,
 	translate: TranslateSettings,
 	layout: LayoutSettings,
@@ -2759,6 +2762,22 @@ export type InternalLinkOccurrence_Serialize = {
 
 export type InternalLinkSyntax = "wikilink" | "markdown";
 
+/**  TypeSafe jEV (System One) settings for smart paper highlighting. */
+export type JevSettings = {
+	apiKey?: string,
+	baseUrl?: string,
+};
+
+export type JevSuggestHighlightsArgs = {
+	vaultPath: string,
+	/**  Vault-relative paper folder, e.g. `papers/2303.17760`. */
+	path: string,
+};
+
+export type JevSuggestHighlightsResult = {
+	highlights: SuggestedHighlight[],
+};
+
 export type JobChangedEvent = JobChangedPayload;
 
 export type JobChangedPayload = {
@@ -3405,6 +3424,17 @@ export type NodeInstallResult_Serialize = {
 	error?: string | null,
 	/**  Host probe re-run after the install attempt. */
 	report: HostDoctorReport_Serialize,
+};
+
+/**
+ *  Rect normalized to 0–1 against the page box, top-left origin, y down —
+ *  identical to what the viewer persists for ask/translate marks.
+ */
+export type NormRect = {
+	x: number | null,
+	y: number | null,
+	w: number | null,
+	h: number | null,
 };
 
 export type NotesTemplateSeedResult = {
@@ -4421,6 +4451,17 @@ export type StageImportFileResult = {
 	path: string,
 };
 
+export type SuggestedHighlight = {
+	quote: string,
+	page: number,
+	rects: NormRect[],
+	color: string,
+	category: string,
+	score: number | null,
+	pageWidth: number | null,
+	pageHeight: number | null,
+};
+
 export type SyncBackendConfig = {
 	/**  Backend discriminator; S3 fields or WebDAV fields apply accordingly. */
 	backend?: SyncBackendKind,
@@ -4591,7 +4632,10 @@ export type TranslateSettings = {
 	sourceLang?: string,
 	providerConfigs?: { [key in string]: TranslateProviderConfig },
 	autoTranslateSelection?: boolean,
+	/**  Deprecated: kept for migration. Use `display_mode` + `dual_pane_source`. */
 	dualPaneTranslate?: boolean,
+	displayMode?: string,
+	dualPaneSource?: string,
 	agentId?: string,
 	modelId?: string,
 	/**

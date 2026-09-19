@@ -1,6 +1,6 @@
 import { createPluginRegistration } from "@embedpdf/core";
 import { EmbedPDF } from "@embedpdf/core/react";
-import type { PdfLinkAnnoObject } from "@embedpdf/models";
+import type { PdfLinkAnnoObject, Rect } from "@embedpdf/models";
 import { AiManagerPluginPackage } from "@embedpdf/plugin-ai-manager/react";
 import {
 	AnnotationPluginPackage,
@@ -32,6 +32,7 @@ import {
 	useScroll,
 } from "@embedpdf/plugin-scroll/react";
 import { SearchPluginPackage, useSearch } from "@embedpdf/plugin-search/react";
+import type { FormattedSelection } from "@embedpdf/plugin-selection/react";
 import {
 	SelectionPluginPackage,
 	useSelectionCapability,
@@ -112,8 +113,10 @@ import { DockviewViewport } from "@/components/viewer/pdf/viewport/dockview-view
 import { PanDragHandler } from "@/components/viewer/pdf/viewport/pan-handler";
 import { WheelZoomHandler } from "@/components/viewer/pdf/viewport/wheel-zoom-handler";
 import { useLibraryStore, useSettings } from "@/hooks/use-app-stores";
+import { commands } from "@/lib/core/bindings";
 import { copyTextToClipboard } from "@/lib/core/clipboard";
 import { errorText } from "@/lib/core/error";
+import { callApiResult } from "@/lib/core/ipc";
 import { notifyError } from "@/lib/core/notify";
 import { openExternalUrl } from "@/lib/core/open-external";
 import { cn } from "@/lib/core/utils";
@@ -125,7 +128,10 @@ import {
 	wikiTargetForPaper,
 } from "@/lib/pdf/annotation-ref";
 import { embedPdfDocumentId } from "@/lib/pdf/document-id";
-import { HIGHLIGHT_HEX_LIST } from "@/lib/pdf/highlight/palette";
+import {
+	HIGHLIGHT_HEX_LIST,
+	normalizeHighlightColor,
+} from "@/lib/pdf/highlight/palette";
 import {
 	getPdfAiRuntime,
 	layoutAnalysisStore,
@@ -449,7 +455,8 @@ function PdfViewerInner({
 	const autoTranslateSelection = useSettings(
 		(s) => s.translate.autoTranslateSelection,
 	);
-	const dualPaneTranslate = useSettings((s) => s.translate.dualPaneTranslate);
+	const displayMode = useSettings((s) => s.translate.displayMode);
+	const dualPaneTranslate = displayMode === "dualPane";
 	const paperMeta = useMemo(() => {
 		if (paperMetaProp) return paperMetaProp;
 		if (!paperRelPath) return undefined;
@@ -968,6 +975,70 @@ function PdfViewerInner({
 		paperAbsPath,
 		paperTitle,
 	]);
+
+	const [smartHighlightBusy, setSmartHighlightBusy] = useState(false);
+	const handleSmartHighlight = useCallback(async () => {
+		if (!vaultPath || !paperRelPath) return;
+		setSmartHighlightBusy(true);
+		try {
+			const { highlights } = await callApiResult(() =>
+				commands.jevSuggestHighlights({ vaultPath, path: paperRelPath }),
+			);
+			for (const h of highlights) {
+				const width = h.pageWidth ?? 0;
+				const height = h.pageHeight ?? 0;
+				if (!width || !height || !h.rects.length) continue;
+				const segmentRects: Rect[] = h.rects
+					.map((r) => {
+						const x = r.x ?? 0;
+						const y = r.y ?? 0;
+						const w = r.w ?? 0;
+						const h_ = r.h ?? 0;
+						return {
+							origin: { x: x * width, y: y * height },
+							size: { width: w * width, height: h_ * height },
+						};
+					})
+					.filter((r) => r.size.width > 0 && r.size.height > 0);
+				const first = segmentRects[0];
+				const rect: Rect = segmentRects.slice(1).reduce(
+					(acc, r) => ({
+						origin: {
+							x: Math.min(acc.origin.x, r.origin.x),
+							y: Math.min(acc.origin.y, r.origin.y),
+						},
+						size: {
+							width:
+								Math.max(
+									acc.origin.x + acc.size.width,
+									r.origin.x + r.size.width,
+								) - Math.min(acc.origin.x, r.origin.x),
+							height:
+								Math.max(
+									acc.origin.y + acc.size.height,
+									r.origin.y + r.size.height,
+								) - Math.min(acc.origin.y, r.origin.y),
+						},
+					}),
+					first,
+				);
+				const selection: FormattedSelection = {
+					pageIndex: h.page - 1,
+					rect,
+					segmentRects,
+				};
+				createHighlights(
+					[selection],
+					normalizeHighlightColor(h.color),
+					h.quote,
+				);
+			}
+		} catch (err) {
+			notifyError(errorText(err));
+		} finally {
+			setSmartHighlightBusy(false);
+		}
+	}, [vaultPath, paperRelPath, createHighlights]);
 
 	// Translation pane: wait for the sidecar hydrate in usePdfLayoutTranslate
 	// before deciding whether to start a job. Starting immediately races the
@@ -1632,6 +1703,8 @@ function PdfViewerInner({
 					isRemotePaper={isRemotePaper}
 					onImportToLibrary={handleImportToLibrary}
 					importBusy={importBusy}
+					smartHighlightBusy={smartHighlightBusy}
+					onSmartHighlight={handleSmartHighlight}
 				/>
 			)}
 

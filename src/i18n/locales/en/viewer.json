@@ -18,6 +18,7 @@
 		"remoteMode": "Remote mode",
 		"jumpBack": "Jump back",
 		"importToLibrary": "Import to library",
+		"smartHighlight": "Smart highlight",
 		"findPlaceholder": "Find in document",
 		"findPrev": "Previous match",
 		"findNext": "Next match",
@@ -53,6 +54,14 @@
 		"translation": {
 			"title": "Translation",
 			"tabTitle": "Translation – {{title}}"
+		},
+		"latexTranslation": {
+			"desktopOnly": "LaTeX translation is only available in the desktop app.",
+			"noSource": "This paper has no local LaTeX source to translate.",
+			"translating": "Translating LaTeX source…",
+			"compiling": "Compiling translated LaTeX…",
+			"compileFailed": "Failed to compile the translated LaTeX. Check that a TeX engine is installed.",
+			"tabTitle": "LaTeX Translation"
 		}
 	},
 	"pdfAsk": {

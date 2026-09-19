@@ -10,6 +10,7 @@
 		"agent": "Agent",
 		"translate": "翻译",
 		"layout": "版面解析",
+		"experimental": "实验功能",
 		"doctor": "问题诊断",
 		"keyboard": "快捷键",
 		"remote-access": "远程访问",
@@ -409,8 +410,15 @@
 		"autoSelection": {
 			"label": "PDF 划词后自动翻译"
 		},
-		"dualPane": {
-			"label": "在侧窗中打开渲染好的翻译"
+		"displayMode": {
+			"label": "翻译显示模式",
+			"overlay": "在原 PDF 上覆盖",
+			"dualPane": "双栏对照"
+		},
+		"dualPaneSource": {
+			"label": "双栏来源",
+			"pdf": "PDF 版式翻译",
+			"latex": "LaTeX 源翻译"
 		},
 		"providerConfig": {
 			"section": "API 服务",
@@ -538,6 +546,20 @@
 				"clearTitle": "清除解析结果？",
 				"reparseTitle": "清除并重新解析？",
 				"scopeLabel": "选择范围"
+			}
+		}
+	},
+	"experimental": {
+		"title": "实验功能",
+		"jev": {
+			"section": "TypeSafe jEV 智能高亮",
+			"description": "启用 AI 驱动的论文高亮。请在下方填写 jEV API key 和接口地址。",
+			"apiKey": {
+				"label": "API key",
+				"placeholder": "jEV API key"
+			},
+			"baseUrl": {
+				"label": "接口地址"
 			}
 		}
 	},
