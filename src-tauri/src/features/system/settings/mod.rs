@@ -807,6 +807,18 @@ impl AppSettingsStore {
         Some((base_url.to_string(), key, model.to_string()))
     }
 
+    /// TypeSafe jEV (System One) credentials. Returns None when the API key is
+    /// unset or is a UI mask (`*`-only), so probes never send masks.
+    pub fn jev_config(&self) -> Option<(String, String)> {
+        let guard = self.inner.lock().ok()?;
+        let base_url = guard.jev.base_url.trim().to_string();
+        let api_key = guard.jev.api_key.trim();
+        if api_key.is_empty() || is_translate_api_key_mask(api_key) {
+            return None;
+        }
+        Some((api_key.to_string(), base_url))
+    }
+
     /// Raw `(tunnel_id, api_key)` for the built-in ChatGPT tunnel supervisor.
     /// Returns None unless both are set; a UI mask counts as unset so a
     /// `settings_get` → `settings_set` round-trip never leaks or wipes the key.
@@ -1781,6 +1793,32 @@ mod tests {
             custom.embedding_config().map(|(base, _, _)| base),
             Some("https://embed.test/v1".into())
         );
+    }
+
+    #[test]
+    fn jev_config_never_returns_masked_key() {
+        let store = AppSettingsStore::for_tests(AppSettings {
+            jev: JevSettings {
+                api_key: "sk-jev-secret".into(),
+                base_url: "https://jev.test/v1".into(),
+            },
+            ..AppSettings::default()
+        });
+        assert_eq!(
+            store.jev_config(),
+            Some(("sk-jev-secret".into(), "https://jev.test/v1".into()))
+        );
+
+        // After redaction the getter must treat the mask as unset.
+        let redacted = redact_secrets(AppSettings {
+            jev: JevSettings {
+                api_key: "sk-jev-secret".into(),
+                base_url: "https://jev.test/v1".into(),
+            },
+            ..AppSettings::default()
+        });
+        let masked_store = AppSettingsStore::for_tests(redacted);
+        assert!(masked_store.jev_config().is_none());
     }
 
     #[test]

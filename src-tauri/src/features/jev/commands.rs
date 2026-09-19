@@ -26,12 +26,10 @@ pub struct JevSuggestHighlightsResult {
 #[tauri::command]
 #[specta::specta]
 pub async fn jev_probe_health(store: State<'_, AppSettingsStore>) -> Result<ApiResult<()>, String> {
-    let settings = match store.get() {
-        Ok(s) => s,
-        Err(err) => return Ok(map_err(err)),
+    let (api_key, base_url) = match store.jev_config() {
+        Some(cfg) => cfg,
+        None => return Ok(map_err(AppError::message("jEV API key is not configured"))),
     };
-    let api_key = settings.settings.jev.api_key;
-    let base_url = settings.settings.jev.base_url;
 
     match crate::features::jev::service::jev_probe_health(&api_key, &base_url).await {
         Ok(()) => Ok(ApiResult::ok(())),
@@ -81,12 +79,10 @@ pub async fn jev_suggest_highlights(
         })
         .unwrap_or_else(|| "Untitled paper".to_string());
 
-    let settings = match store.get() {
-        Ok(s) => s,
-        Err(err) => return Ok(map_err(err)),
+    let (api_key, base_url) = match store.jev_config() {
+        Some(cfg) => cfg,
+        None => return Ok(map_err(AppError::message("jEV API key is not configured"))),
     };
-    let api_key = settings.settings.jev.api_key;
-    let base_url = settings.settings.jev.base_url;
 
     match jev_suggest_highlights_for_paper(&paper_dir, &pdf_path, &title, &api_key, &base_url).await
     {
