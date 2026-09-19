@@ -242,6 +242,64 @@ fn clamp01(v: f32) -> f32 {
     v.clamp(0.0, 1.0)
 }
 
+/// One page of raw text extracted from a PDF text layer, in PDFium read order.
+///
+/// Used by callers that need to consume the same plain text that the viewer
+/// exposes through the PDFium selection engine (smart-highlight jEV streams,
+/// downstream quote linkage, …). Geometry is intentionally not returned —
+/// [`locate_in_pdf`] owns the rect contract.
+#[derive(Debug, Clone)]
+pub struct ExtractedPage {
+    /// 1-based page number, matching [`LocateMatch::page`].
+    pub page: u32,
+    /// Raw text PDFium reads out of the page's text layer. Newlines separate
+    /// PDFium spans; callers that want paragraph chunks should fold
+    /// whitespace themselves.
+    pub text: String,
+}
+
+/// Best-effort full-text dump of a PDF, page by page, in document order.
+///
+/// Mirrors what the viewer's selection engine sees (EmbedPDF is the same
+/// PDFium build): pages with a real text layer come back populated, image-only
+/// pages come back empty rather than guessed. Returns an empty [`Vec`] only
+/// when the document genuinely has no pages; an error is reserved for
+/// unreadable PDFs (corrupt header, encrypted without a key, …) so callers
+/// can surface the distinction to the user.
+pub fn extract_text_in_pdf(pdf: &[u8]) -> Result<Vec<ExtractedPage>, AppError> {
+    let lib = Library::init();
+    let doc = lib
+        .load_document_from_bytes(pdf, None)
+        .map_err(|e| AppError::message(format!("open pdf: {e:?}")))?;
+    let page_count = doc.page_count();
+    if page_count <= 0 {
+        return Ok(Vec::new());
+    }
+
+    let mut out = Vec::with_capacity(page_count as usize);
+    for index in 0..page_count {
+        let page = match doc.page(index) {
+            Ok(p) => p,
+            Err(_) => continue,
+        };
+        let text_page = match page.text() {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+        let total = text_page.char_count();
+        let text = if total <= 0 {
+            String::new()
+        } else {
+            text_page.get_text(0, total)
+        };
+        out.push(ExtractedPage {
+            page: (index + 1) as u32,
+            text,
+        });
+    }
+    Ok(out)
+}
+
 /// Locate every occurrence of `req.quote`, and/or measure `req.measure_pages`.
 /// Matches come back in page order, except that a satisfied `req.page` hint
 /// short-circuits the rest of the document.
@@ -539,6 +597,28 @@ mod tests {
             objects.len() + 1
         ));
         out.into_bytes()
+    }
+
+    #[test]
+    fn extracts_text_layer_per_page_in_document_order() {
+        let pdf = tiny_pdf("Attention is all you need");
+        let pages = extract_text_in_pdf(&pdf).expect("extract");
+        assert_eq!(pages.len(), 1, "expected one page, got {pages:?}");
+        assert_eq!(pages[0].page, 1);
+        assert!(
+            pages[0].text.contains("Attention"),
+            "PDFium text did not include the source string; got {:?}",
+            pages[0].text
+        );
+    }
+
+    #[test]
+    fn extract_text_returns_open_pdf_error_on_garbage_bytes() {
+        let err = extract_text_in_pdf(b"not a pdf").unwrap_err();
+        assert!(
+            err.to_string().contains("open pdf"),
+            "expected open-pdf error, got {err}"
+        );
     }
 
     #[test]

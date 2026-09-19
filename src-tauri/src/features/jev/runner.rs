@@ -69,7 +69,6 @@ pub fn jev_smart_highlights_runner(
                     };
 
                     let highlights = jev_suggest_highlights_with_progress(
-                        &paper_dir,
                         &pdf_path,
                         &title,
                         &api_key,

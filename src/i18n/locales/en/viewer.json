@@ -20,6 +20,7 @@
 		"importToLibrary": "Import to library",
 		"smartHighlight": "Smart highlight",
 		"smartHighlightFailed": "Smart highlight failed",
+		"jevNoReadableText": "PDF text layer is empty or unreadable. Run Parse Body (Tools → Parse PDF body) to OCR the paper first.",
 		"findPlaceholder": "Find in document",
 		"findPrev": "Previous match",
 		"findNext": "Next match",

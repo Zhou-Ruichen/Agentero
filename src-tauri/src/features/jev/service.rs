@@ -2,7 +2,7 @@
 
 use crate::core::error::AppError;
 use crate::features::paper::analyze::parse::run_pdf_locate;
-use crate::features::pdf::locate::LocateRequest;
+use crate::features::pdf::locate::{extract_text_in_pdf, LocateRequest};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -61,191 +61,24 @@ const DIMS: [(&str, &str, &str); 5] = [
 
 const COLOR_PRIORITY: [&str; 5] = ["method", "novelty", "effect", "claim", "limitation"];
 
-/// Best-effort text extraction from a paper folder: PAPER.md > TeX source > PDF parse.
-fn extract_paper_text(paper_dir: &Path) -> Vec<Paragraph> {
-    // 1. Prefer PAPER.md
-    let paper_md = paper_dir.join("PAPER.md");
-    if paper_md.is_file() {
-        if let Ok(text) = std::fs::read_to_string(&paper_md) {
-            return split_paragraphs(&text);
-        }
-    }
-
-    // 2. Fall back to TeX source
-    let tex_candidates = ["source/main.tex", "source/main_zh-CN.tex", "main.tex"];
-    for rel in &tex_candidates {
-        let tex_path = paper_dir.join(rel);
-        if tex_path.is_file() {
-            if let Ok(text) = std::fs::read_to_string(&tex_path) {
-                let plain = strip_latex(&text);
-                return split_paragraphs(&plain);
-            }
-        }
-    }
-
-    Vec::new()
-}
-
-fn strip_latex(text: &str) -> String {
-    // First pass: remove \begin{env}...\end{env} blocks
-    let mut text = text.to_string();
-    loop {
-        let mut chars = text.chars().collect::<Vec<_>>();
-        if let Some(start) = find_command(&chars, 0, "begin") {
-            let after_begin = skip_command_tail(&chars, start);
-            if after_begin < chars.len() && chars[after_begin] == '{' {
-                let env_end = skip_bracket(&chars, after_begin, '{', '}');
-                if env_end > after_begin + 1 {
-                    let env_name: String = chars[after_begin + 1..env_end - 1].iter().collect();
-                    let end_cmd = format!("\\end{{{}}}", env_name);
-                    let end_chars: Vec<char> = end_cmd.chars().collect();
-                    if let Some(end_pos) = find_subseq(&chars, env_end, &end_chars) {
-                        chars.drain(start..end_pos + end_chars.len());
-                        text = chars.into_iter().collect();
-                        continue;
-                    }
-                }
-            }
-        }
-        break;
-    }
-
-    let mut out = String::with_capacity(text.len());
-    let chars: Vec<char> = text.chars().collect();
-    let mut i = 0;
-    while i < chars.len() {
-        let c = chars[i];
-        if c == '\\' {
-            // Skip command name
-            i += 1;
-            while i < chars.len() && chars[i].is_alphabetic() {
-                i += 1;
-            }
-            // Skip optional star
-            if i < chars.len() && chars[i] == '*' {
-                i += 1;
-            }
-            // Skip optional [arg]
-            if i < chars.len() && chars[i] == '[' {
-                i = skip_bracket(&chars, i, '[', ']');
-            }
-            // Skip mandatory {arg}
-            if i < chars.len() && chars[i] == '{' {
-                i = skip_bracket(&chars, i, '{', '}');
-            }
-            out.push(' ');
-            continue;
-        }
-        if c == '%' {
-            // Skip comment to end of line
-            while i < chars.len() && chars[i] != '\n' {
-                i += 1;
-            }
-            continue;
-        }
-        if c == '$' {
-            // Inline or display math
-            let mut end = i + 1;
-            let display = end < chars.len() && chars[end] == '$';
-            if display {
-                end += 1;
-            }
-            while end < chars.len() {
-                if display && chars[end] == '$' && end + 1 < chars.len() && chars[end + 1] == '$' {
-                    end += 2;
-                    break;
-                }
-                if !display && chars[end] == '$' {
-                    end += 1;
-                    break;
-                }
-                end += 1;
-            }
-            i = end;
-            out.push(' ');
-            continue;
-        }
-        if c == '{' || c == '}' {
-            out.push(' ');
-            i += 1;
-            continue;
-        }
-        out.push(c);
-        i += 1;
-    }
-    collapse_whitespace(&out)
-}
-
-fn find_command(chars: &[char], start: usize, name: &str) -> Option<usize> {
-    let name_chars: Vec<char> = name.chars().collect();
-    for i in start..chars.len() {
-        if chars[i] == '\\'
-            && i + 1 + name_chars.len() <= chars.len()
-            && chars[i + 1..i + 1 + name_chars.len()] == name_chars[..]
-            && (i + 1 + name_chars.len() == chars.len()
-                || !chars[i + 1 + name_chars.len()].is_alphabetic())
-        {
-            return Some(i);
-        }
-    }
-    None
-}
-
-fn skip_command_tail(chars: &[char], start: usize) -> usize {
-    let mut i = start + 1;
-    while i < chars.len() && chars[i].is_alphabetic() {
-        i += 1;
-    }
-    if i < chars.len() && chars[i] == '*' {
-        i += 1;
-    }
-    i
-}
-
-fn find_subseq(chars: &[char], start: usize, needle: &[char]) -> Option<usize> {
-    if needle.is_empty() || start + needle.len() > chars.len() {
-        return None;
-    }
-    for i in start..=chars.len() - needle.len() {
-        if chars[i..i + needle.len()] == needle[..] {
-            return Some(i);
-        }
-    }
-    None
-}
-
-fn skip_bracket(chars: &[char], start: usize, open: char, close: char) -> usize {
-    if start >= chars.len() || chars[start] != open {
-        return start;
-    }
-    let mut depth = 1;
-    let mut i = start + 1;
-    while i < chars.len() && depth > 0 {
-        if chars[i] == open {
-            depth += 1;
-        } else if chars[i] == close {
-            depth -= 1;
-        }
-        i += 1;
-    }
-    i
-}
-
-fn collapse_whitespace(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut prev_space = true;
-    for c in text.chars() {
-        if c.is_whitespace() {
-            if !prev_space {
-                out.push(' ');
-                prev_space = true;
-            }
-        } else {
-            out.push(c);
-            prev_space = false;
-        }
-    }
-    out.trim().to_string()
+/// Best-effort text extraction from a paper's PDF, mirroring what the viewer
+/// reads out of the PDFium text layer. Returns paragraph-sized chunks suitable
+/// for the jEV scoring loop.
+fn extract_paper_text(pdf_path: &Path) -> Vec<Paragraph> {
+    let Ok(bytes) = std::fs::read(pdf_path) else {
+        return Vec::new();
+    };
+    let Ok(pages) = extract_text_in_pdf(&bytes) else {
+        return Vec::new();
+    };
+    // Blank line between pages so `split_paragraphs` breaks paragraphs at
+    // page boundaries instead of stitching across them.
+    let joined = pages
+        .into_iter()
+        .map(|p| p.text)
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    split_paragraphs(&joined)
 }
 
 fn split_paragraphs(text: &str) -> Vec<Paragraph> {
@@ -440,7 +273,6 @@ pub async fn jev_probe_health(api_key: &str, base_url: &str) -> Result<(), AppEr
 }
 
 async fn jev_suggest_highlights_impl<F: FnMut(usize, usize) + Send>(
-    paper_dir: &Path,
     pdf_path: &Path,
     title: &str,
     api_key: &str,
@@ -448,11 +280,9 @@ async fn jev_suggest_highlights_impl<F: FnMut(usize, usize) + Send>(
     cancel_token: &CancellationToken,
     mut on_progress: F,
 ) -> Result<Vec<SuggestedHighlight>, AppError> {
-    let paragraphs = extract_paper_text(paper_dir);
+    let paragraphs = extract_paper_text(pdf_path);
     if paragraphs.is_empty() {
-        return Err(AppError::message(
-            "No readable text found for this paper (need PAPER.md, TeX source, or parseable PDF)",
-        ));
+        return Err(AppError::message("jevNoReadableText"));
     }
 
     let total_batches = paragraphs.chunks(BATCH_SIZE).len();
@@ -528,28 +358,17 @@ async fn jev_suggest_highlights_impl<F: FnMut(usize, usize) + Send>(
 
 /// Extract highlights for one paper by calling jEV and locating each chosen quote in the PDF.
 pub async fn jev_suggest_highlights_for_paper(
-    paper_dir: &Path,
     pdf_path: &Path,
     title: &str,
     api_key: &str,
     base_url: &str,
 ) -> Result<Vec<SuggestedHighlight>, AppError> {
     let cancel_token = CancellationToken::new();
-    jev_suggest_highlights_impl(
-        paper_dir,
-        pdf_path,
-        title,
-        api_key,
-        base_url,
-        &cancel_token,
-        |_, _| {},
-    )
-    .await
+    jev_suggest_highlights_impl(pdf_path, title, api_key, base_url, &cancel_token, |_, _| {}).await
 }
 
 /// Same as [`jev_suggest_highlights_for_paper`] but with cancellation and per-batch progress.
 pub async fn jev_suggest_highlights_with_progress<F: FnMut(usize, usize) + Send>(
-    paper_dir: &Path,
     pdf_path: &Path,
     title: &str,
     api_key: &str,
@@ -558,7 +377,6 @@ pub async fn jev_suggest_highlights_with_progress<F: FnMut(usize, usize) + Send>
     on_progress: F,
 ) -> Result<Vec<SuggestedHighlight>, AppError> {
     jev_suggest_highlights_impl(
-        paper_dir,
         pdf_path,
         title,
         api_key,

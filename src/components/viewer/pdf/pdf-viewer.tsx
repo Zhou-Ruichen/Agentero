@@ -1072,7 +1072,12 @@ function PdfViewerInner({
 				applyJevHighlights(highlights);
 				setJevJobId(null);
 			} else if (job.state === "failed" || job.state === "cancelled") {
-				notifyError(job.error?.trim() || t("pdf.smartHighlightFailed"));
+				const raw = job.error?.trim();
+				const message =
+					raw === "jevNoReadableText"
+						? t("pdf.jevNoReadableText")
+						: raw || t("pdf.smartHighlightFailed");
+				notifyError(message);
 				setJevJobId(null);
 			}
 		});

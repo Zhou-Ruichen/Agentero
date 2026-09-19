@@ -76,8 +76,7 @@ pub async fn jev_suggest_highlights(
         None => return Ok(map_err(AppError::message("jEV API key is not configured"))),
     };
 
-    match jev_suggest_highlights_for_paper(&paper_dir, &pdf_path, &title, &api_key, &base_url).await
-    {
+    match jev_suggest_highlights_for_paper(&pdf_path, &title, &api_key, &base_url).await {
         Ok(highlights) => Ok(ApiResult::ok(JevSuggestHighlightsResult { highlights })),
         Err(err) => Ok(map_err(err)),
     }
