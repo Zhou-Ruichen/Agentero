@@ -7,12 +7,22 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::Path;
+use tokio_util::sync::CancellationToken;
 
 const JEV_MODEL: &str = "jev-latest";
 const BATCH_SIZE: usize = 4;
 const MIN_PARAGRAPH_LEN: usize = 80;
 const MAX_PARAGRAPH_LEN: usize = 800;
 const SCORE_THRESHOLD: f64 = 2.0;
+
+pub(crate) fn read_title_from_sidecar(paper_dir: &Path) -> Option<String> {
+    let raw = std::fs::read_to_string(paper_dir.join("metadata.json")).ok()?;
+    let json: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    json.get("title")?
+        .as_str()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
@@ -429,13 +439,14 @@ pub async fn jev_probe_health(api_key: &str, base_url: &str) -> Result<(), AppEr
     call_jev(api_key, base_url, request).await.map(|_| ())
 }
 
-/// Extract highlights for one paper by calling jEV and locating each chosen quote in the PDF.
-pub async fn jev_suggest_highlights_for_paper(
+async fn jev_suggest_highlights_impl<F: FnMut(usize, usize) + Send>(
     paper_dir: &Path,
     pdf_path: &Path,
     title: &str,
     api_key: &str,
     base_url: &str,
+    cancel_token: &CancellationToken,
+    mut on_progress: F,
 ) -> Result<Vec<SuggestedHighlight>, AppError> {
     let paragraphs = extract_paper_text(paper_dir);
     if paragraphs.is_empty() {
@@ -444,9 +455,14 @@ pub async fn jev_suggest_highlights_for_paper(
         ));
     }
 
+    let total_batches = paragraphs.chunks(BATCH_SIZE).len();
     let mut all_highlights: Vec<SuggestedHighlight> = Vec::new();
 
-    for chunk in paragraphs.chunks(BATCH_SIZE) {
+    for (batch_index, chunk) in paragraphs.chunks(BATCH_SIZE).enumerate() {
+        if cancel_token.is_cancelled() {
+            return Err(AppError::message("jEV smart highlight cancelled"));
+        }
+
         let paras: HashMap<String, String> = chunk
             .iter()
             .map(|p| (p.id.clone(), p.text.clone()))
@@ -499,6 +515,8 @@ pub async fn jev_suggest_highlights_for_paper(
                 }
             }
         }
+
+        on_progress(batch_index + 1, total_batches);
     }
 
     // Deduplicate by quote to avoid overlapping identical suggestions
@@ -506,4 +524,47 @@ pub async fn jev_suggest_highlights_for_paper(
     all_highlights.retain(|h| seen.insert(h.quote.clone()));
 
     Ok(all_highlights)
+}
+
+/// Extract highlights for one paper by calling jEV and locating each chosen quote in the PDF.
+pub async fn jev_suggest_highlights_for_paper(
+    paper_dir: &Path,
+    pdf_path: &Path,
+    title: &str,
+    api_key: &str,
+    base_url: &str,
+) -> Result<Vec<SuggestedHighlight>, AppError> {
+    let cancel_token = CancellationToken::new();
+    jev_suggest_highlights_impl(
+        paper_dir,
+        pdf_path,
+        title,
+        api_key,
+        base_url,
+        &cancel_token,
+        |_, _| {},
+    )
+    .await
+}
+
+/// Same as [`jev_suggest_highlights_for_paper`] but with cancellation and per-batch progress.
+pub async fn jev_suggest_highlights_with_progress<F: FnMut(usize, usize) + Send>(
+    paper_dir: &Path,
+    pdf_path: &Path,
+    title: &str,
+    api_key: &str,
+    base_url: &str,
+    cancel_token: &CancellationToken,
+    on_progress: F,
+) -> Result<Vec<SuggestedHighlight>, AppError> {
+    jev_suggest_highlights_impl(
+        paper_dir,
+        pdf_path,
+        title,
+        api_key,
+        base_url,
+        cancel_token,
+        on_progress,
+    )
+    .await
 }

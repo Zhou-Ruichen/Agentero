@@ -19,6 +19,7 @@
 		"jumpBack": "Jump back",
 		"importToLibrary": "Import to library",
 		"smartHighlight": "Smart highlight",
+		"smartHighlightFailed": "Smart highlight failed",
 		"findPlaceholder": "Find in document",
 		"findPrev": "Previous match",
 		"findNext": "Next match",
@@ -58,6 +59,7 @@
 		"latexTranslation": {
 			"desktopOnly": "LaTeX translation is only available in the desktop app.",
 			"noSource": "This paper has no local LaTeX source to translate.",
+			"missingPaperPath": "Paper path is missing; cannot start LaTeX translation.",
 			"translating": "Translating LaTeX source…",
 			"compiling": "Compiling translated LaTeX…",
 			"compileFailed": "Failed to compile the translated LaTeX. Check that a TeX engine is installed.",

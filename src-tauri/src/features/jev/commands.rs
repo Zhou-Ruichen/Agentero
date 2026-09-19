@@ -2,11 +2,12 @@
 
 use crate::core::error::{map_err, ApiResult, AppError};
 use crate::core::fs::{resolve_paper_dir, resolve_vault};
-use crate::features::jev::service::{jev_suggest_highlights_for_paper, SuggestedHighlight};
+use crate::features::jev::service::{
+    jev_suggest_highlights_for_paper, read_title_from_sidecar, SuggestedHighlight,
+};
 use crate::features::paper::catalog::probe_paper_caps;
 use crate::features::system::settings::AppSettingsStore;
 use serde::{Deserialize, Serialize};
-use std::path::Path;
 use tauri::State;
 
 #[derive(Debug, Deserialize, specta::Type)]
@@ -35,15 +36,6 @@ pub async fn jev_probe_health(store: State<'_, AppSettingsStore>) -> Result<ApiR
         Ok(()) => Ok(ApiResult::ok(())),
         Err(err) => Ok(map_err(err)),
     }
-}
-
-fn read_title_from_sidecar(paper_dir: &Path) -> Option<String> {
-    let raw = std::fs::read_to_string(paper_dir.join("metadata.json")).ok()?;
-    let json: serde_json::Value = serde_json::from_str(&raw).ok()?;
-    json.get("title")?
-        .as_str()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
 }
 
 #[tauri::command]

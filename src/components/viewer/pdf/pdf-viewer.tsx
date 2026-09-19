@@ -113,7 +113,7 @@ import { DockviewViewport } from "@/components/viewer/pdf/viewport/dockview-view
 import { PanDragHandler } from "@/components/viewer/pdf/viewport/pan-handler";
 import { WheelZoomHandler } from "@/components/viewer/pdf/viewport/wheel-zoom-handler";
 import { useLibraryStore, useSettings } from "@/hooks/use-app-stores";
-import { commands } from "@/lib/core/bindings";
+import { commands, events, type SuggestedHighlight } from "@/lib/core/bindings";
 import { copyTextToClipboard } from "@/lib/core/clipboard";
 import { errorText } from "@/lib/core/error";
 import { callApiResult } from "@/lib/core/ipc";
@@ -141,6 +141,8 @@ import {
 } from "@/lib/pdf/layout";
 import type { ActiveSelectionCard } from "@/lib/pdf/selection";
 import { PDF_ZOOM_MAX, PDF_ZOOM_MIN } from "@/lib/pdf/zoom";
+import { basenameOf } from "@/lib/vault/path";
+import { openLatexTranslationTab } from "@/lib/workspace/actions-latex-translation";
 
 export type {
 	PdfViewerHandle,
@@ -456,6 +458,7 @@ function PdfViewerInner({
 		(s) => s.translate.autoTranslateSelection,
 	);
 	const displayMode = useSettings((s) => s.translate.displayMode);
+	const dualPaneSource = useSettings((s) => s.translate.dualPaneSource);
 	const dualPaneTranslate = displayMode === "dualPane";
 	const paperMeta = useMemo(() => {
 		if (paperMetaProp) return paperMetaProp;
@@ -956,7 +959,7 @@ function PdfViewerInner({
 
 	const handleToggleLayoutTranslateWithDualPane = useCallback(() => {
 		if (plainViewer) return;
-		if (!dualPaneTranslate) {
+		if (displayMode !== "dualPane") {
 			toggleLayoutTranslate();
 			return;
 		}
@@ -965,25 +968,37 @@ function PdfViewerInner({
 		// layout-translation job so only one task runs at a time. The receiver
 		// resolves this back to a workspace tab, so pass the revision-stripped
 		// base id (`docId` carries a `::r<n>` buffer suffix).
-		onOpenTranslationTab?.(baseDocId, paperAbsPath ?? null, paperTitle ?? null);
+		if (dualPaneSource === "pdf") {
+			onOpenTranslationTab?.(
+				baseDocId,
+				paperAbsPath ?? null,
+				paperTitle ?? null,
+			);
+			return;
+		}
+		if (!paperAbsPath) {
+			notifyError(t("pdf.latexTranslation.missingPaperPath"));
+			return;
+		}
+		void openLatexTranslationTab(
+			baseDocId,
+			paperAbsPath,
+			basenameOf(paperAbsPath),
+		);
 	}, [
 		plainViewer,
-		dualPaneTranslate,
+		displayMode,
+		dualPaneSource,
 		toggleLayoutTranslate,
 		onOpenTranslationTab,
 		baseDocId,
 		paperAbsPath,
 		paperTitle,
+		t,
 	]);
 
-	const [smartHighlightBusy, setSmartHighlightBusy] = useState(false);
-	const handleSmartHighlight = useCallback(async () => {
-		if (!vaultPath || !paperRelPath) return;
-		setSmartHighlightBusy(true);
-		try {
-			const { highlights } = await callApiResult(() =>
-				commands.jevSuggestHighlights({ vaultPath, path: paperRelPath }),
-			);
+	const applyJevHighlights = useCallback(
+		(highlights: SuggestedHighlight[]) => {
 			for (const h of highlights) {
 				const width = h.pageWidth ?? 0;
 				const height = h.pageHeight ?? 0;
@@ -1033,12 +1048,54 @@ function PdfViewerInner({
 					h.quote,
 				);
 			}
+		},
+		[createHighlights],
+	);
+
+	const [jevJobId, setJevJobId] = useState<string | null>(null);
+	const smartHighlightBusy = jevJobId != null;
+
+	useEffect(() => {
+		if (!jevJobId) return;
+		let active = true;
+		const unlistenPromise = events.jobChanged.listen((event) => {
+			if (!active) return;
+			const job = event.payload.job;
+			if (job.id !== jevJobId || job.kind !== "jevSmartHighlights") return;
+			if (job.state === "succeeded") {
+				const result = (
+					job.params as {
+						result?: { highlights?: SuggestedHighlight[] };
+					} | null
+				)?.result;
+				const highlights = result?.highlights ?? [];
+				applyJevHighlights(highlights);
+				setJevJobId(null);
+			} else if (job.state === "failed" || job.state === "cancelled") {
+				notifyError(job.error?.trim() || t("pdf.smartHighlightFailed"));
+				setJevJobId(null);
+			}
+		});
+		return () => {
+			active = false;
+			void unlistenPromise.then((dispose) => dispose());
+		};
+	}, [jevJobId, applyJevHighlights, t]);
+
+	const handleSmartHighlight = useCallback(async () => {
+		if (!vaultPath || !paperRelPath) return;
+		try {
+			const snapshot = await callApiResult(() =>
+				commands.jobJevSmartHighlightsEnqueue({
+					vaultPath,
+					path: paperRelPath,
+				}),
+			);
+			setJevJobId(snapshot.id);
 		} catch (err) {
 			notifyError(errorText(err));
-		} finally {
-			setSmartHighlightBusy(false);
 		}
-	}, [vaultPath, paperRelPath, createHighlights]);
+	}, [vaultPath, paperRelPath]);
 
 	// Translation pane: wait for the sidecar hydrate in usePdfLayoutTranslate
 	// before deciding whether to start a job. Starting immediately races the
