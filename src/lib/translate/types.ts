@@ -49,8 +49,21 @@ export type TranslateSettings = {
 	/**
 	 * Open a secondary window with the rendered full-document translation so the
 	 * original PDF stays on the left and the translation stays on the right.
+	 * @deprecated Use `displayMode` instead; kept for migration.
 	 */
 	dualPaneTranslate: boolean;
+	/**
+	 * How full-document translation is displayed.
+	 * - `overlay`: in-place translation layer over the source PDF.
+	 * - `dualPane`: side-by-side source + translation panes.
+	 */
+	displayMode: TranslationDisplayMode;
+	/**
+	 * Which source drives the left pane when `displayMode === "dualPane"`.
+	 * - `pdf`: the rendered PDF.
+	 * - `latex`: the arXiv LaTeX source.
+	 */
+	dualPaneSource: DualPaneSource;
 	/**
 	 * Agent seat for provider === "agent".
 	 * Empty = follow registry defaultId.
@@ -175,3 +188,18 @@ export const COMMERCIAL_MT_DOCS_URLS: Record<
 		"https://console.cloud.google.com/apis/library/translate.googleapis.com",
 	openaiCompatible: "https://platform.openai.com/api-keys",
 };
+
+/** How full-document translation is rendered. */
+export type TranslationDisplayMode = "overlay" | "dualPane";
+
+/** Canonical display modes in UI order. */
+export const TRANSLATION_DISPLAY_MODES: TranslationDisplayMode[] = [
+	"overlay",
+	"dualPane",
+];
+
+/** Source pane type for dual-pane full-document translation. */
+export type DualPaneSource = "pdf" | "latex";
+
+/** Canonical dual-pane source values in UI order. */
+export const DUAL_PANE_SOURCES: DualPaneSource[] = ["pdf", "latex"];
