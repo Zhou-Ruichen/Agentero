@@ -47,11 +47,12 @@ async function needsReTranslation(
 	if (!meta) return true;
 	const settings = loadSettings();
 	if (meta.providerId !== settings.translate.provider) return true;
+	const { readVaultFile, vaultPathExists } = await import("@/lib/vault");
 	for (const file of meta.files) {
 		try {
-			const current = await import("@/lib/vault").then((m) =>
-				m.readVaultFile(file.original),
-			);
+			// If the user deleted translated files manually, re-translate.
+			if (!(await vaultPathExists(file.translated))) return true;
+			const current = await readVaultFile(file.original);
 			const hash = await sha256FileText(current);
 			if (hash !== file.sourceHash) return true;
 		} catch {
