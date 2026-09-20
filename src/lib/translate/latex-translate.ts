@@ -318,11 +318,34 @@ async function translateChunk(
 
 export type TranslateLatexContentOptions = {
 	/**
-	 * Called with a 0–100 progress value as paragraphs are processed.
-	 * Reports content-level progress only; callers scale it per-file / per-project.
+	 * Called with a 0–100 progress value relative to this call's scope.
+	 * Callers that process larger documents should wrap this with
+	 * {@link scaleProgress} so nested translations report within their slice.
 	 */
 	onProgress?: (progress: number) => void;
 };
+
+/**
+ * Wrap a progress callback so that local 0–100 values are mapped to the
+ * [start, end] window and never decrease. Returns undefined when the window is
+ * empty, which lets callers skip emitting progress for tiny/no-op slices.
+ */
+function scaleProgress(
+	onProgress: ((progress: number) => void) | undefined,
+	start: number,
+	end: number,
+): ((progress: number) => void) | undefined {
+	if (!onProgress || end <= start) return undefined;
+	let last = -1;
+	return (pct: number) => {
+		const scaled = start + (pct / 100) * (end - start);
+		const rounded = Math.min(100, Math.max(0, Math.round(scaled)));
+		if (rounded >= last) {
+			last = rounded;
+			onProgress(rounded);
+		}
+	};
+}
 
 export async function translateLatexContent(
 	text: string,
@@ -498,7 +521,9 @@ export async function translateLatexBody(
 		if (!env) {
 			// No more environments; translate the rest of the text.
 			const tail = text.slice(i);
-			out += await translateLatexContent(tail, runTranslateChunk, opts);
+			out += await translateLatexContent(tail, runTranslateChunk, {
+				onProgress: scaleProgress(opts?.onProgress, (i / total) * 100, 100),
+			});
 			report(total);
 			break;
 		}
@@ -508,24 +533,40 @@ export async function translateLatexBody(
 			out += await translateLatexContent(
 				text.slice(i, env.start),
 				runTranslateChunk,
-				opts,
+				{
+					onProgress: scaleProgress(
+						opts?.onProgress,
+						(i / total) * 100,
+						(env.start / total) * 100,
+					),
+				},
 			);
 		}
 
+		const envStartPct = (env.start / total) * 100;
+		const envEndPct = (env.end / total) * 100;
 		if (SKIP_ENVIRONMENTS.has(env.name)) {
 			// Keep the whole environment as-is.
 			out += text.slice(env.start, env.end);
 		} else if (CAPTION_ENVIRONMENTS.has(env.name)) {
 			// Translate captions, keep everything else.
 			const envBody = text.slice(env.start, env.end);
-			out += await translateCaptionCommands(envBody, runTranslateChunk, opts);
+			out += await translateCaptionCommands(envBody, runTranslateChunk, {
+				onProgress: scaleProgress(opts?.onProgress, envStartPct, envEndPct),
+			});
 		} else {
 			// Recursively translate other environments (abstract, itemize, etc.).
 			const inner = text.slice(env.openEnd, env.closeStart);
 			const translatedInner = await translateLatexBody(
 				inner,
 				runTranslateChunk,
-				opts,
+				{
+					onProgress: scaleProgress(
+						opts?.onProgress,
+						(env.openEnd / total) * 100,
+						(env.closeStart / total) * 100,
+					),
+				},
 			);
 			out +=
 				text.slice(env.start, env.openEnd) +
@@ -692,22 +733,16 @@ export async function translateLatexProject(
 		files: [],
 	};
 
-	const reportGlobal = (fileIndex: number, innerPct: number): void => {
-		if (!files.length || !opts?.onProgress) return;
-		const fileBase = fileIndex / files.length;
-		const fileSpan = 1 / files.length;
-		const pct = Math.round((fileBase + (innerPct / 100) * fileSpan) * 100);
-		opts.onProgress(pct);
-	};
-
 	for (let i = 0; i < files.length; i++) {
 		const file = files[i];
 		const content = await readVaultFile(file);
+		const fileStart = (i / files.length) * 100;
+		const fileEnd = ((i + 1) / files.length) * 100;
 		const translatedBody = await translateLatexBody(
 			content,
 			runTranslateChunk,
 			{
-				onProgress: (innerPct) => reportGlobal(i, innerPct),
+				onProgress: scaleProgress(opts?.onProgress, fileStart, fileEnd),
 			},
 		);
 		const rewritten = rewriteInputPaths(translatedBody, lang);
@@ -718,7 +753,7 @@ export async function translateLatexProject(
 			translated: outPath,
 			sourceHash: await sha256Text(content),
 		});
-		reportGlobal(i, 100);
+		opts?.onProgress?.(Math.round(fileEnd));
 	}
 
 	const rootTranslated = translatedTexPath(rootTexPath, lang);

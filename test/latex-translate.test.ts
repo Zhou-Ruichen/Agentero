@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
 	insertCommandArgSeparators,
+	translateLatexBody,
 	translateLatexContent,
 } from "@/lib/translate/latex-translate";
 
@@ -70,5 +71,56 @@ describe("translateLatexContent pipeline", () => {
 			identityTranslator,
 		);
 		expect(result).toContain("\\LaTeX{}中文");
+	});
+});
+
+describe("translateLatexBody progress", () => {
+	it("reports monotonic progress through nested environments", async () => {
+		const text = [
+			"First introduction paragraph.",
+			"",
+			"Second introduction paragraph.",
+			"",
+			"\\begin{abstract}",
+			"Abstract paragraph one.",
+			"",
+			"Abstract paragraph two.",
+			"\\end{abstract}",
+			"",
+			"Conclusion paragraph.",
+		].join("\n");
+
+		const progress: number[] = [];
+		await translateLatexBody(text, identityTranslator, {
+			onProgress: (pct) => progress.push(pct),
+		});
+
+		for (let i = 1; i < progress.length; i++) {
+			expect(progress[i]).toBeGreaterThanOrEqual(progress[i - 1]);
+		}
+		expect(progress.at(-1)).toBe(100);
+	});
+
+	it("reports monotonic progress through figure captions", async () => {
+		const text = [
+			"Before the figure.",
+			"",
+			"\\begin{figure}",
+			"\\includegraphics{plot.png}",
+			"\\caption{This is the caption text.}",
+			"\\end{figure}",
+			"",
+			"After the figure.",
+		].join("\n");
+
+		const progress: number[] = [];
+		await translateLatexBody(text, identityTranslator, {
+			onProgress: (pct) => progress.push(pct),
+		});
+
+		for (let i = 1; i < progress.length; i++) {
+			expect(progress[i]).toBeGreaterThanOrEqual(progress[i - 1]);
+		}
+		expect(progress.at(-1)).toBe(100);
 	});
 });
