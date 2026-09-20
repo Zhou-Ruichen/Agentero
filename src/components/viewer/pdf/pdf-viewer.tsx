@@ -929,6 +929,7 @@ function PdfViewerInner({
 		layoutTranslateLabel,
 		toggleLayoutTranslate,
 		togglePageLayoutTranslate,
+		latexTranslateRunning,
 	} = usePdfLayoutCluster({
 		docId,
 		translationPane,
@@ -951,6 +952,7 @@ function PdfViewerInner({
 
 	const handleToggleLayoutTranslateWithDualPane = useCallback(() => {
 		if (plainViewer) return;
+		if (latexTranslateRunning) return;
 		if (!dualPaneTranslate) {
 			toggleLayoutTranslate();
 			return;
@@ -963,6 +965,7 @@ function PdfViewerInner({
 		onOpenTranslationTab?.(baseDocId, paperAbsPath ?? null, paperTitle ?? null);
 	}, [
 		plainViewer,
+		latexTranslateRunning,
 		dualPaneTranslate,
 		toggleLayoutTranslate,
 		onOpenTranslationTab,
@@ -1631,6 +1634,7 @@ function PdfViewerInner({
 					layoutTranslateActive={layoutTranslateActive}
 					layoutTranslateLabel={layoutTranslateLabel}
 					onToggleLayoutTranslate={handleToggleLayoutTranslateWithDualPane}
+					latexTranslateRunning={latexTranslateRunning}
 					isRemotePaper={isRemotePaper}
 					onImportToLibrary={handleImportToLibrary}
 					importBusy={importBusy}

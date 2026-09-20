@@ -316,9 +316,18 @@ async function translateChunk(
 	return result;
 }
 
+export type TranslateLatexContentOptions = {
+	/**
+	 * Called with a 0–100 progress value as paragraphs are processed.
+	 * Reports content-level progress only; callers scale it per-file / per-project.
+	 */
+	onProgress?: (progress: number) => void;
+};
+
 export async function translateLatexContent(
 	text: string,
 	runTranslateChunk: (text: string) => Promise<string>,
+	opts?: TranslateLatexContentOptions,
 ): Promise<string> {
 	// Translate paragraph-by-paragraph so command-only paragraphs stay intact
 	// while prose paragraphs are translated. Global masking per paragraph keeps
@@ -326,10 +335,17 @@ export async function translateLatexContent(
 	const paragraphs = text.split(/\n\s*\n/);
 	const translatedParagraphs: string[] = [];
 	let totalMissing = 0;
-	for (const para of paragraphs) {
+	const report = (index: number): void => {
+		if (!paragraphs.length || !opts?.onProgress) return;
+		const pct = Math.round(((index + 1) / paragraphs.length) * 100);
+		opts.onProgress(pct);
+	};
+	for (let i = 0; i < paragraphs.length; i++) {
+		const para = paragraphs[i];
 		const trimmed = para.trim();
 		if (!trimmed) {
 			translatedParagraphs.push(para);
+			report(i);
 			continue;
 		}
 		const masked = maskLatexSource(trimmed);
@@ -352,6 +368,7 @@ export async function translateLatexContent(
 			totalMissing += restored.missing;
 		}
 		translatedParagraphs.push(translated);
+		report(i);
 	}
 	if (totalMissing > 0) {
 		logger.warn("latex translate: masked tokens lost", { count: totalMissing });
@@ -368,6 +385,7 @@ const CAPTION_RE = /\\caption(\*)?\{/g;
 export async function translateCaptionCommands(
 	text: string,
 	runTranslateChunk: (text: string) => Promise<string>,
+	opts?: TranslateLatexContentOptions,
 ): Promise<string> {
 	let out = "";
 	let lastIndex = 0;
@@ -386,6 +404,7 @@ export async function translateCaptionCommands(
 		const translatedInner = await translateLatexContent(
 			inner,
 			runTranslateChunk,
+			opts,
 		);
 		out += text.slice(lastIndex, start);
 		out += `${m[0].slice(0, -1)}{${translatedInner}}`;
@@ -457,19 +476,30 @@ function findEnvironmentBoundaries(
 /**
  * Recursively translate a LaTeX document body, skipping verbatim/code
  * environments and translating only captions inside figure/table environments.
+ *
+ * `opts.onProgress` reports 0–100 for this body only; callers scale it to the
+ * file/project level.
  */
 export async function translateLatexBody(
 	text: string,
 	runTranslateChunk: (text: string) => Promise<string>,
+	opts?: TranslateLatexContentOptions,
 ): Promise<string> {
 	let out = "";
 	let i = 0;
+	const total = text.length || 1;
+	const report = (pos: number): void => {
+		if (!opts?.onProgress) return;
+		const pct = Math.min(100, Math.round((pos / total) * 100));
+		opts.onProgress(pct);
+	};
 	while (i < text.length) {
 		const env = findEnvironmentBoundaries(text, i);
 		if (!env) {
 			// No more environments; translate the rest of the text.
 			const tail = text.slice(i);
-			out += await translateLatexContent(tail, runTranslateChunk);
+			out += await translateLatexContent(tail, runTranslateChunk, opts);
+			report(total);
 			break;
 		}
 
@@ -478,6 +508,7 @@ export async function translateLatexBody(
 			out += await translateLatexContent(
 				text.slice(i, env.start),
 				runTranslateChunk,
+				opts,
 			);
 		}
 
@@ -487,13 +518,14 @@ export async function translateLatexBody(
 		} else if (CAPTION_ENVIRONMENTS.has(env.name)) {
 			// Translate captions, keep everything else.
 			const envBody = text.slice(env.start, env.end);
-			out += await translateCaptionCommands(envBody, runTranslateChunk);
+			out += await translateCaptionCommands(envBody, runTranslateChunk, opts);
 		} else {
 			// Recursively translate other environments (abstract, itemize, etc.).
 			const inner = text.slice(env.openEnd, env.closeStart);
 			const translatedInner = await translateLatexBody(
 				inner,
 				runTranslateChunk,
+				opts,
 			);
 			out +=
 				text.slice(env.start, env.openEnd) +
@@ -502,6 +534,7 @@ export async function translateLatexBody(
 		}
 
 		i = env.end;
+		report(i);
 	}
 	return out;
 }
@@ -636,10 +669,19 @@ export function prepareRootTexForLang(
 	return { text: out, engine: "xelatex" };
 }
 
+export type TranslateLatexProjectOptions = {
+	/**
+	 * Called with a 0–100 progress value as files are translated.
+	 * The value covers the translation phase only (not compilation).
+	 */
+	onProgress?: (progress: number) => void;
+};
+
 export async function translateLatexProject(
 	rootTexPath: string,
 	lang: string,
 	runTranslateChunk: (text: string) => Promise<string>,
+	opts?: TranslateLatexProjectOptions,
 ): Promise<{ rootTranslated: string; meta: LatexTranslationMeta }> {
 	const files = await discoverTexFiles(rootTexPath);
 	const meta: LatexTranslationMeta = {
@@ -650,9 +692,24 @@ export async function translateLatexProject(
 		files: [],
 	};
 
-	for (const file of files) {
+	const reportGlobal = (fileIndex: number, innerPct: number): void => {
+		if (!files.length || !opts?.onProgress) return;
+		const fileBase = fileIndex / files.length;
+		const fileSpan = 1 / files.length;
+		const pct = Math.round((fileBase + (innerPct / 100) * fileSpan) * 100);
+		opts.onProgress(pct);
+	};
+
+	for (let i = 0; i < files.length; i++) {
+		const file = files[i];
 		const content = await readVaultFile(file);
-		const translatedBody = await translateLatexBody(content, runTranslateChunk);
+		const translatedBody = await translateLatexBody(
+			content,
+			runTranslateChunk,
+			{
+				onProgress: (innerPct) => reportGlobal(i, innerPct),
+			},
+		);
 		const rewritten = rewriteInputPaths(translatedBody, lang);
 		const outPath = translatedTexPath(file, lang);
 		await writeVaultFile(outPath, rewritten);
@@ -661,6 +718,7 @@ export async function translateLatexProject(
 			translated: outPath,
 			sourceHash: await sha256Text(content),
 		});
+		reportGlobal(i, 100);
 	}
 
 	const rootTranslated = translatedTexPath(rootTexPath, lang);

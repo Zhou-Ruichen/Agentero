@@ -60,6 +60,7 @@
 			"translating": "Translating LaTeX source…",
 			"compiling": "Compiling translated LaTeX…",
 			"compileFailed": "LaTeX compile failed. Check the log in the output panel.",
+			"fallbackToLayout": "No LaTeX source found; falling back to PDF-layout translation.",
 			"tabTitle": "Translation (LaTeX)"
 		}
 	},

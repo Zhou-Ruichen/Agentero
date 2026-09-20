@@ -3,9 +3,14 @@
  */
 
 import i18n from "@/i18n";
+import {
+	BackgroundTaskCancelledError,
+	isBackgroundTaskCancelledError,
+} from "@/lib/core/background-tasks";
 import { errorText } from "@/lib/core/error";
 import { logger } from "@/lib/core/logger";
-import { notifyError, notifySuccess } from "@/lib/core/notify";
+import { notifyError } from "@/lib/core/notify";
+import { runLocalActivity } from "@/lib/core/tasks";
 import { isTauri } from "@/lib/core/tauri";
 import { loadSettings } from "@/lib/settings";
 import { langsFromSettings } from "@/lib/translate/lang";
@@ -65,6 +70,12 @@ function flattenFileNodes(nodes: FileNode[]): FileNode[] {
 	return out;
 }
 
+export async function hasLatexTranslationSource(
+	paperPath: string,
+): Promise<boolean> {
+	return (await findRootTexPath(paperPath)) !== null;
+}
+
 async function findRootTexPath(paperPath: string): Promise<string | null> {
 	if (!isTauri()) return null;
 	// Probe the common arXiv layout.
@@ -87,13 +98,20 @@ async function findRootTexPath(paperPath: string): Promise<string | null> {
 	return null;
 }
 
+function throwIfCancelled(signal: AbortSignal): void {
+	if (signal.aborted) throw new BackgroundTaskCancelledError();
+}
+
 /**
  * Translate the paper's LaTeX source to `{lang}`, compile it, and open the
- * resulting PDF in a right split pane.
+ * resulting PDF in a right split pane. Runs as a local background activity so
+ * the task panel shows progress and the toolbar button can reflect the running
+ * state.
  */
 export async function openLatexTranslationTab(
 	paperTabId: string,
 	paperPath: string,
+	paperRelPath: string,
 	paperId: string,
 ): Promise<void> {
 	if (!isTauri()) {
@@ -101,66 +119,89 @@ export async function openLatexTranslationTab(
 		return;
 	}
 
-	const settings = loadSettings();
-	const langs = langsFromSettings(settings.translate, i18n.language ?? "en");
-	const lang = langs.targetLang;
-
 	const rootTexPath = await findRootTexPath(paperPath);
 	if (!rootTexPath) {
 		notifyError(i18n.t("viewer:pdf.latexTranslation.noSource"));
 		return;
 	}
 
-	notifySuccess(i18n.t("viewer:pdf.latexTranslation.translating"));
+	const settings = loadSettings();
+	const langs = langsFromSettings(settings.translate, i18n.language ?? "en");
+	const lang = langs.targetLang;
 
 	try {
-		if (await needsReTranslation(paperPath, lang)) {
-			const runner = createLatexTranslateRunner();
-			const { rootTranslated, meta } = await translateLatexProject(
-				rootTexPath,
-				lang,
-				runner,
-			);
-			await writeLatexTranslationMeta(paperPath, lang, meta);
+		await runLocalActivity(
+			{
+				kind: "latexTranslate",
+				title: i18n.t("viewer:pdf.latexTranslation.tabTitle"),
+				detail: i18n.t("viewer:pdf.latexTranslation.translating"),
+				paperPath: paperRelPath,
+			},
+			async ({ signal, setProgress, setDetail }) => {
+				throwIfCancelled(signal);
 
-			// Prepare the root tex for the target language (e.g. CJK support).
-			const { readVaultFile, writeVaultFile } = await import("@/lib/vault");
-			const rootContent = await readVaultFile(rootTranslated);
-			const prepared = prepareRootTexForLang(rootContent, lang);
-			await writeVaultFile(rootTranslated, prepared.text);
-		}
+				if (await needsReTranslation(paperPath, lang)) {
+					setProgress(0);
+					const runner = createLatexTranslateRunner();
+					const { rootTranslated, meta } = await translateLatexProject(
+						rootTexPath,
+						lang,
+						runner,
+						{
+							onProgress: (translationPct) =>
+								setProgress(Math.round((translationPct / 100) * 90)),
+						},
+					);
+					throwIfCancelled(signal);
+					await writeLatexTranslationMeta(paperPath, lang, meta);
 
-		const rootTranslated = translatedTexPath(rootTexPath, lang);
-		const resolvedRoot = await resolveTexRoot(rootTranslated);
-		const expectedPdf = latexTranslationPdfPath(paperPath, paperId, lang);
+					// Prepare the root tex for the target language (e.g. CJK support).
+					const { readVaultFile, writeVaultFile } = await import("@/lib/vault");
+					const rootContent = await readVaultFile(rootTranslated);
+					const prepared = prepareRootTexForLang(rootContent, lang);
+					await writeVaultFile(rootTranslated, prepared.text);
+					setProgress(90);
+				}
 
-		notifySuccess(i18n.t("viewer:pdf.latexTranslation.compiling"));
-		const prepared = prepareRootTexForLang(
-			await import("@/lib/vault").then((m) => m.readVaultFile(resolvedRoot)),
-			lang,
+				const rootTranslated = translatedTexPath(rootTexPath, lang);
+				const resolvedRoot = await resolveTexRoot(rootTranslated);
+				const expectedPdf = latexTranslationPdfPath(paperPath, paperId, lang);
+
+				setDetail(i18n.t("viewer:pdf.latexTranslation.compiling"));
+				setProgress(90);
+				const prepared = prepareRootTexForLang(
+					await import("@/lib/vault").then((m) =>
+						m.readVaultFile(resolvedRoot),
+					),
+					lang,
+				);
+
+				// Force xelatex for CJK languages.
+				const engineOverride =
+					prepared.engine === "xelatex" ? "xelatex" : undefined;
+
+				const pdfPath = await compileTexFile(resolvedRoot, {
+					quietSuccess: true,
+					triggerPath: resolvedRoot,
+					engine: engineOverride,
+				});
+				if (!pdfPath) {
+					throw new Error(i18n.t("viewer:pdf.latexTranslation.compileFailed"));
+				}
+
+				throwIfCancelled(signal);
+
+				// Move the compiled PDF next to the original paper PDF.
+				const { renameVaultPath } = await import("@/lib/vault");
+				await renameVaultPath(pdfPath, expectedPdf);
+				setProgress(100);
+
+				// Open or focus the right pane.
+				openCompiledTranslationPane(paperTabId, paperPath, expectedPdf);
+			},
 		);
-
-		// Force xelatex for CJK languages.
-		const engineOverride =
-			prepared.engine === "xelatex" ? "xelatex" : undefined;
-
-		const pdfPath = await compileTexFile(resolvedRoot, {
-			quietSuccess: true,
-			triggerPath: resolvedRoot,
-			engine: engineOverride,
-		});
-		if (!pdfPath) {
-			notifyError(i18n.t("viewer:pdf.latexTranslation.compileFailed"));
-			return;
-		}
-
-		// Move the compiled PDF next to the original paper PDF.
-		const { renameVaultPath } = await import("@/lib/vault");
-		await renameVaultPath(pdfPath, expectedPdf);
-
-		// Open or focus the right pane.
-		openCompiledTranslationPane(paperTabId, paperPath, expectedPdf);
 	} catch (e) {
+		if (isBackgroundTaskCancelledError(e)) return;
 		logger.error("latex translation failed", { error: errorText(e) });
 		notifyError(errorText(e));
 	}
