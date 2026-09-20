@@ -53,6 +53,14 @@
 		"translation": {
 			"title": "Translation",
 			"tabTitle": "Translation – {{title}}"
+		},
+		"latexTranslation": {
+			"desktopOnly": "LaTeX-source translation only works locally.",
+			"noSource": "This paper has no local LaTeX source to translate.",
+			"translating": "Translating LaTeX source…",
+			"compiling": "Compiling translated LaTeX…",
+			"compileFailed": "LaTeX compile failed. Check the log in the output panel.",
+			"tabTitle": "Translation (LaTeX)"
 		}
 	},
 	"pdfAsk": {

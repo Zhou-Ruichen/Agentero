@@ -622,8 +622,19 @@ function normalizeTranslateSettings(
 	if (typeof raw.autoTranslateSelection === "boolean") {
 		base.autoTranslateSelection = raw.autoTranslateSelection;
 	}
-	if (typeof raw.dualPaneTranslate === "boolean") {
-		base.dualPaneTranslate = raw.dualPaneTranslate;
+	if (raw.displayMode === "overlay" || raw.displayMode === "dualPane") {
+		base.displayMode = raw.displayMode;
+	}
+	if (raw.dualPaneSource === "pdf" || raw.dualPaneSource === "latex") {
+		base.dualPaneSource = raw.dualPaneSource;
+	}
+	// Legacy migration: older snapshots stored a single `dualPaneTranslate`
+	// boolean instead of the new displayMode / dualPaneSource split. Translate
+	// it once so existing users keep their preference across the upgrade.
+	const legacyDualPane = (raw as { dualPaneTranslate?: unknown })
+		.dualPaneTranslate;
+	if (typeof legacyDualPane === "boolean" && raw.displayMode === undefined) {
+		base.displayMode = legacyDualPane ? "dualPane" : "overlay";
 	}
 	if (typeof raw.agentId === "string") {
 		base.agentId = raw.agentId.trim();

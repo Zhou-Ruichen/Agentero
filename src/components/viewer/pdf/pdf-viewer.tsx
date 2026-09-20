@@ -449,7 +449,9 @@ function PdfViewerInner({
 	const autoTranslateSelection = useSettings(
 		(s) => s.translate.autoTranslateSelection,
 	);
-	const dualPaneTranslate = useSettings((s) => s.translate.dualPaneTranslate);
+	const dualPaneTranslate = useSettings(
+		(s) => s.translate.displayMode === "dualPane",
+	);
 	const paperMeta = useMemo(() => {
 		if (paperMetaProp) return paperMetaProp;
 		if (!paperRelPath) return undefined;

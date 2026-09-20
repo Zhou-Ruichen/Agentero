@@ -4585,13 +4585,18 @@ export type TranslateProviderConfig = {
 	model?: string,
 };
 
+export type TranslationDisplayMode = "overlay" | "dualPane";
+
+export type DualPaneSource = "pdf" | "latex";
+
 export type TranslateSettings = {
 	provider?: string,
 	targetLang?: string,
 	sourceLang?: string,
 	providerConfigs?: { [key in string]: TranslateProviderConfig },
 	autoTranslateSelection?: boolean,
-	dualPaneTranslate?: boolean,
+	displayMode?: TranslationDisplayMode,
+	dualPaneSource?: DualPaneSource,
 	agentId?: string,
 	modelId?: string,
 	/**

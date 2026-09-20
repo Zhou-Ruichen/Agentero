@@ -412,6 +412,16 @@
 		"dualPane": {
 			"label": "Open rendered translation in a side window"
 		},
+		"displayMode": {
+			"label": "Display mode",
+			"overlay": "Overlay on PDF",
+			"dualPane": "Side-by-side dual pane"
+		},
+		"dualPaneSource": {
+			"label": "Right-pane source",
+			"pdf": "Translated PDF layout",
+			"latex": "Translated LaTeX (compiled to PDF)"
+		},
 		"providerConfig": {
 			"section": "API Services",
 			"confirm": "Confirm",

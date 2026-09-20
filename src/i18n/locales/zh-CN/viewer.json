@@ -53,6 +53,14 @@
 		"translation": {
 			"title": "翻译",
 			"tabTitle": "译文 – {{title}}"
+		},
+		"latexTranslation": {
+			"desktopOnly": "LaTeX 源码翻译仅在本地可用。",
+			"noSource": "该论文没有可翻译的本地 LaTeX 源码。",
+			"translating": "正在翻译 LaTeX 源码…",
+			"compiling": "正在编译翻译后的 LaTeX…",
+			"compileFailed": "LaTeX 编译失败。请查看输出面板中的日志。",
+			"tabTitle": "翻译（LaTeX 源码）"
 		}
 	},
 	"pdfAsk": {
