@@ -195,11 +195,42 @@ function hasNaturalLanguage(text: string): boolean {
 
 const MIN_NATURAL_LANG_CHARS = 20;
 
-const COMMAND_FOLLOWED_BY_LETTER_RE =
-	/(\\[A-Za-z]+)(?=[A-Za-z\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af])/gu;
+function isCjkChar(c: string): boolean {
+	// CJK Unified Ideographs + Hiragana + Katakana + Hangul Syllables.
+	return /[\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af]/.test(c);
+}
 
-function insertCommandArgSeparators(text: string): string {
-	return text.replace(COMMAND_FOLLOWED_BY_LETTER_RE, "$1{}");
+/**
+ * Insert `{}` between a command name and a following CJK character so the
+ * character is not absorbed as part of the command (e.g. \LaTeX中文).
+ *
+ * The implementation scans left-to-right and reads the full command name before
+ * looking at the next character; this avoids regex backtracking that would
+ * otherwise split command names like \documentclass[...] into \documentclas{}s.
+ */
+export function insertCommandArgSeparators(text: string): string {
+	let out = "";
+	let i = 0;
+	while (i < text.length) {
+		if (text[i] === "\\") {
+			let j = i + 1;
+			while (j < text.length && /[A-Za-z]/.test(text[j])) {
+				j++;
+			}
+			if (j > i + 1) {
+				// i..j is a command name such as \documentclass.
+				const next = text[j];
+				if (next !== undefined && isCjkChar(next)) {
+					out += `${text.slice(i, j)}{}`;
+					i = j;
+					continue;
+				}
+			}
+		}
+		out += text[i];
+		i++;
+	}
+	return out;
 }
 
 function isWorthTranslating(maskedText: string): boolean {
