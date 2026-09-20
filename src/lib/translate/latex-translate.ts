@@ -9,6 +9,7 @@
 import i18n from "@/i18n";
 import { errorText } from "@/lib/core/error";
 import { logger } from "@/lib/core/logger";
+import { basenameOf, dirnameOf } from "@/lib/core/path";
 import { loadSettings } from "@/lib/settings";
 import { langsFromSettings } from "@/lib/translate/lang";
 import { runTranslate } from "@/lib/translate/run";
@@ -533,7 +534,7 @@ export function findTexDependencies(text: string, rootDir: string): string[] {
 }
 
 export async function discoverTexFiles(rootTexPath: string): Promise<string[]> {
-	const rootDir = joinVaultPath(rootTexPath, "..");
+	const rootDir = dirnameOf(rootTexPath);
 	const visited = new Set<string>();
 	const files: string[] = [];
 	const queue: string[] = [rootTexPath];
@@ -557,8 +558,8 @@ export async function discoverTexFiles(rootTexPath: string): Promise<string[]> {
 }
 
 export function translatedTexPath(texPath: string, lang: string): string {
-	const dir = joinVaultPath(texPath, "..");
-	const base = texPath.replace(/\\/g, "/").split("/").pop() ?? "";
+	const dir = dirnameOf(texPath);
+	const base = basenameOf(texPath);
 	const stem = base.replace(/\.tex$/, "");
 	return joinVaultPath(dir, `${stem}_${lang}.tex`);
 }
