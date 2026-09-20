@@ -242,31 +242,64 @@ fn clamp01(v: f32) -> f32 {
     v.clamp(0.0, 1.0)
 }
 
-/// One page of raw text extracted from a PDF text layer, in PDFium read order.
+/// One sentence extracted from a PDF text layer, in PDFium read order, with
+/// its on-page geometry.
 ///
 /// Used by callers that need to consume the same plain text that the viewer
 /// exposes through the PDFium selection engine (smart-highlight jEV streams,
-/// downstream quote linkage, …). Geometry is intentionally not returned —
-/// [`locate_in_pdf`] owns the rect contract.
+/// downstream quote linkage, …). Geometry is included so callers can render
+/// marks without a second locate pass.
 #[derive(Debug, Clone)]
-pub struct ExtractedPage {
+pub struct ExtractedSentence {
     /// 1-based page number, matching [`LocateMatch::page`].
     pub page: u32,
-    /// Raw text PDFium reads out of the page's text layer. Newlines separate
-    /// PDFium spans; callers that want paragraph chunks should fold
-    /// whitespace themselves.
+    /// Raw text PDFium reads out of the page's text layer for this sentence.
     pub text: String,
+    /// Normalized rects covering this sentence's visual lines on the page.
+    pub rects: Vec<NormRect>,
+    /// Viewport page width in points.
+    pub page_width: f32,
+    /// Viewport page height in points.
+    pub page_height: f32,
 }
 
-/// Best-effort full-text dump of a PDF, page by page, in document order.
+fn text_rect_to_norm_rect(
+    page: &liteparse_pdfium::Page<'_, '_>,
+    view_box: &liteparse_pdfium::RectF,
+    page_width: f32,
+    page_height: f32,
+    r: &liteparse_pdfium::TextRect,
+) -> Option<NormRect> {
+    let page_bounds = RectF {
+        left: r.left as f32,
+        top: r.top as f32,
+        right: r.right as f32,
+        bottom: r.bottom as f32,
+    };
+    let v = page.bounds_to_viewport(view_box, &page_bounds);
+    let w = (v.right - v.left) / page_width;
+    let h = (v.bottom - v.top) / page_height;
+    if w <= 0.0 || h <= 0.0 {
+        return None;
+    }
+    Some(NormRect {
+        x: clamp01(v.left / page_width),
+        y: clamp01(v.top / page_height),
+        w: clamp01(w),
+        h: clamp01(h),
+    })
+}
+
+/// Best-effort sentence-level extraction of a PDF's text layer, in document
+/// order, with each sentence's on-page geometry.
 ///
 /// Mirrors what the viewer's selection engine sees (EmbedPDF is the same
-/// PDFium build): pages with a real text layer come back populated, image-only
+/// PDFium build). Pages with a real text layer come back populated, image-only
 /// pages come back empty rather than guessed. Returns an empty [`Vec`] only
 /// when the document genuinely has no pages; an error is reserved for
 /// unreadable PDFs (corrupt header, encrypted without a key, …) so callers
 /// can surface the distinction to the user.
-pub fn extract_text_in_pdf(pdf: &[u8]) -> Result<Vec<ExtractedPage>, AppError> {
+pub fn extract_text_in_pdf(pdf: &[u8]) -> Result<Vec<ExtractedSentence>, AppError> {
     let lib = Library::init();
     let doc = lib
         .load_document_from_bytes(pdf, None)
@@ -276,7 +309,7 @@ pub fn extract_text_in_pdf(pdf: &[u8]) -> Result<Vec<ExtractedPage>, AppError> {
         return Ok(Vec::new());
     }
 
-    let mut out = Vec::with_capacity(page_count as usize);
+    let mut out = Vec::new();
     for index in 0..page_count {
         let page = match doc.page(index) {
             Ok(p) => p,
@@ -286,16 +319,76 @@ pub fn extract_text_in_pdf(pdf: &[u8]) -> Result<Vec<ExtractedPage>, AppError> {
             Ok(t) => t,
             Err(_) => continue,
         };
-        let total = text_page.char_count();
-        let text = if total <= 0 {
-            String::new()
-        } else {
-            text_page.get_text(0, total)
+        let view_box = match page.view_box() {
+            Some(v) => v,
+            None => continue,
         };
-        out.push(ExtractedPage {
-            page: (index + 1) as u32,
-            text,
-        });
+        let (page_width, page_height) = page.viewport_size(&view_box);
+        if page_width <= 0.0 || page_height <= 0.0 {
+            continue;
+        }
+        let total = text_page.char_count();
+        if total <= 0 {
+            continue;
+        }
+        let raw = text_page.get_text(0, total);
+        let chars: Vec<char> = raw.chars().collect();
+        let effective_total = (total as usize).min(chars.len());
+
+        let page_number = (index + 1) as u32;
+        let mut sentence_start: usize = 0;
+        for i in 0..effective_total {
+            if chars[i] == '.' || chars[i] == '!' || chars[i] == '?' {
+                let end = i + 1;
+                let text: String = chars[sentence_start..end].iter().collect();
+                let char_start = sentence_start as i32;
+                let char_count = (end - sentence_start) as i32;
+                let mut rects = Vec::new();
+                let rect_count = text_page.count_rects(char_start, char_count);
+                for r in 0..rect_count {
+                    if let Some(rect) = text_page.rect(r) {
+                        if let Some(norm) =
+                            text_rect_to_norm_rect(&page, &view_box, page_width, page_height, &rect)
+                        {
+                            rects.push(norm);
+                        }
+                    }
+                }
+                out.push(ExtractedSentence {
+                    page: page_number,
+                    text,
+                    rects,
+                    page_width,
+                    page_height,
+                });
+                sentence_start = end;
+            }
+        }
+
+        // Trailing text without a sentence terminator.
+        if sentence_start < effective_total {
+            let text: String = chars[sentence_start..effective_total].iter().collect();
+            let char_start = sentence_start as i32;
+            let char_count = (effective_total - sentence_start) as i32;
+            let mut rects = Vec::new();
+            let rect_count = text_page.count_rects(char_start, char_count);
+            for r in 0..rect_count {
+                if let Some(rect) = text_page.rect(r) {
+                    if let Some(norm) =
+                        text_rect_to_norm_rect(&page, &view_box, page_width, page_height, &rect)
+                    {
+                        rects.push(norm);
+                    }
+                }
+            }
+            out.push(ExtractedSentence {
+                page: page_number,
+                text,
+                rects,
+                page_width,
+                page_height,
+            });
+        }
     }
     Ok(out)
 }
@@ -600,15 +693,24 @@ mod tests {
     }
 
     #[test]
-    fn extracts_text_layer_per_page_in_document_order() {
+    fn extracts_sentences_layer_in_document_order() {
         let pdf = tiny_pdf("Attention is all you need");
-        let pages = extract_text_in_pdf(&pdf).expect("extract");
-        assert_eq!(pages.len(), 1, "expected one page, got {pages:?}");
-        assert_eq!(pages[0].page, 1);
+        let sentences = extract_text_in_pdf(&pdf).expect("extract");
+        assert_eq!(
+            sentences.len(),
+            1,
+            "expected one sentence, got {sentences:?}"
+        );
+        assert_eq!(sentences[0].page, 1);
         assert!(
-            pages[0].text.contains("Attention"),
+            sentences[0].text.contains("Attention"),
             "PDFium text did not include the source string; got {:?}",
-            pages[0].text
+            sentences[0].text
+        );
+        assert!(
+            !sentences[0].rects.is_empty(),
+            "expected sentence geometry; got {:?}",
+            sentences[0].rects
         );
     }
 
