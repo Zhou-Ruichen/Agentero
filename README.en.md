@@ -219,6 +219,8 @@ This project is licensed under the [MIT License](LICENSE).
 
 Thanks to the [LinuxDo](https://linux.do/) and [ModelScope](https://modelscope.cn/) communities for their support and feedback.
 
+Thanks to [AtomGit](https://gitcode.com/poco-ai/Agentero) for hosting a mirror in China, enabling faster access and release downloads for users in mainland China.
+
 Thank all of the contributors!
 
 ![contributors img Made with contrib.rocks](https://contrib.rocks/image?repo=poco-ai/Agentero)
