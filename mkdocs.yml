@@ -32,6 +32,7 @@ nav:
       - 导入和管理论文: usage/import-papers.md
       - 阅读、标注与整理: usage/read-and-organize.md
       - 接入 Agent: usage/agents.md
+      - 接入 GenericAgent ACP: usage/genericagent-acp.md
       - 用 MCP 连接外部 Agent: usage/mcp.md
       - 移动端: usage/mobile.md
       - 使用 Zotero Connector: usage/zotero.md
@@ -47,6 +48,7 @@ nav:
       - Markdown 编辑: frontend/markdown.md
       - PDF 阅读与划词: frontend/pdf.md
       - PDF 版面分析（实验）: frontend/pdf-layout-analysis.md
+      - 网页论文阅读与划词: frontend/web-view.md
       - Agent 面板: frontend/agent.md
       - 移动端: frontend/mobile.md
       - 双链 UI: frontend/wiki.md
@@ -94,6 +96,12 @@ nav:
       - 使用记录总结 (#239): development/usage-analytics.md
       - 生命周期事件系统（Lifecycle Events）: development/lifecycle-events.md
       - 云同步（S3）设计草稿: development/cloud-sync-s3.md
+      - A2A 本机与远端协作: development/A2A.md
+      - Agent DX（CLI / MCP / Skill）: development/agent-dx.md
+      - Crate 拆分路线图: development/crate-split-roadmap.md
+      - Import 学术 API 抽象层: development/import-api-abstraction.md
+      - Rust 端架构重构计划: development/rust-arch-refactor.md
+      - 知乎开放平台集成: development/zhihu.md
 
   - 测试:
       - 概览: test/index.md
@@ -130,6 +138,24 @@ nav:
       - Windows 启动与问题诊断弹出黑色控制台窗口: bug_fix/windows-console-window-flash.md
       - "笔记正文 < 比较符截断后续内容（#533）": bug_fix/note-markdown-stray-less-than.md
       - "macOS 首次精读弹出 Music / iCloud / 文件夹权限（#570）": bug_fix/macos-tcc-folder-prompts.md
+      - "ACP 历史回放被 No response requested 占位": bug_fix/acp-replay-no-response-requested.md
+      - Agent Composer 首次语音输入被吞: bug_fix/agent-composer-voice-input-first-token.md
+      - Agent 历史会话恢复加载反馈: bug_fix/agent-history-session-shimmer.md
+      - "Agent 消息公式 < 被截断（#584）": bug_fix/agent-message-math-less-than.md
+      - CLI 导入修复残缺论文单元: bug_fix/cli-import-repairs-incomplete-paper.md
+      - Windows ACP 终端 Hermes MSYS2 挂死: bug_fix/hermes-terminal-pending-msys2-hang.md
+      - 任务 runner panic 导致并发槽泄漏: bug_fix/job-runner-panic-slot-leak.md
+      - macOS 主窗口可无限缩小: bug_fix/macos-window-min-size-config-merge.md
+      - PDF 内部链接跳转后返回原位置: bug_fix/pdf-citation-jump-back.md
+      - PDF 引用跳转后被拉回第 1 页: bug_fix/pdf-citation-page-restore-race.md
+      - PDF 重新编译后仍显示旧版本: bug_fix/pdf-disk-refresh-after-compile.md
+      - PDF 布局翻译取消后覆盖新任务: bug_fix/pdf-layout-translation-cancellation-race.md
+      - "Windows PDF 翻页随机跳到首尾页（#539）": bug_fix/pdf-windows-scroll-endpoint-jump.md
+      - "Windows PDF 滚动跳回已保存位置（#427）": bug_fix/pdf-windows-scroll-restore-jump.md
+      - Pi ACP 未使用 Vault 工作目录: bug_fix/pi-acp-vault-cwd.md
+      - "Settings 切换语言不立即生效（#437）": bug_fix/settings-locale-no-immediate-switch.md
+      - 左侧文件树偶发黑屏: bug_fix/vault-sidebar-blank-until-scroll.md
+      - 左侧栏收起后文件树跳回顶部: bug_fix/vault-sidebar-jump-to-top.md
 
 markdown_extensions:
   - admonition
