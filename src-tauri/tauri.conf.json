@@ -5,7 +5,7 @@
   "identifier": "com.poco-ai.agentero",
   "build": {
     "beforeDevCommand": "pnpm pdfium:stage && pnpm adapters:stage && pnpm dev",
-    "devUrl": "http://127.0.0.1:15173",
+    "devUrl": "http://localhost:1420",
     "beforeBuildCommand": "pnpm pdfium:stage && pnpm adapters:stage && pnpm build",
     "frontendDist": "../dist"
   },
