@@ -41,6 +41,24 @@ const IGNORE_NAMES: &[&str] = &[
 
 const ALLOWED_DOT_NAMES: &[&str] = &[".env.example", ".agents"];
 
+/// Names of the cloud-sync store's artifacts (`blobs/`, `manifests/`, `HEAD`,
+/// `vault.json` — see `integration/sync/engine.rs`). When the sync target is a
+/// cloud folder a desktop client (Nutstore, Nextcloud, …) mirrors back into
+/// the vault, these appear as vault entries. They are engine internals, never
+/// user content, so every vault consumer blinds itself to them: this tree and
+/// its renderer-side mirror (`src/lib/vault/tree.ts`, both root level only —
+/// a nested `notes/blobs/` folder is user content and stays visible), the
+/// sync scan (`snapshot::is_ignored_name`), and the watcher
+/// (`watcher::is_ignored`), the latter two at any depth because the store can
+/// sit in a user-named subfolder of a mirrored target. Keep in sync with the
+/// engine's `HEAD_KEY` / `VAULT_KEY` / blob and manifest prefixes.
+pub const SYNC_STORE_ARTIFACT_NAMES: &[&str] = &["blobs", "manifests", "HEAD", "vault.json"];
+
+/// A vault-root child name that belongs to a mirrored sync store.
+pub fn is_sync_store_artifact(name: &str) -> bool {
+    SYNC_STORE_ARTIFACT_NAMES.contains(&name)
+}
+
 /// File extensions produced by LaTeX engines (pdflatex / xelatex / lualatex /
 /// latexmk / tectonic / bibtex / biber / makeindex / glossary). They pile up
 /// next to the .tex source after each compile; hide them from the file tree
@@ -274,6 +292,11 @@ fn list_dir(
         if should_ignore(&name) {
             continue;
         }
+        // Sync-store artifacts only ever land at the vault root (a mirrored
+        // WebDAV target); nested same-named folders are user content.
+        if rel.is_empty() && is_sync_store_artifact(&name) {
+            continue;
+        }
         let file_type = match entry.file_type() {
             Ok(t) => t,
             Err(_) => continue,
@@ -491,6 +514,39 @@ mod tests {
 
         // Outside the vault is rejected.
         assert!(list_children(root, Path::new("/"), &caps).is_err());
+    }
+
+    #[test]
+    fn sync_store_artifacts_hidden_at_root_only() {
+        let root = &temp_root("sync-store");
+        // A sync store mirrored into the vault root by a desktop WebDAV client.
+        write(&root.join("blobs/ab/hash"), "x");
+        write(&root.join("manifests/0000000001-abcd.json.gz"), "x");
+        write(&root.join("HEAD"), "{}");
+        write(&root.join("vault.json"), "{}");
+        write(&root.join("notes/idea.md"), "x");
+        // Nested same-named folders are user content and must stay visible.
+        write(&root.join("notes/blobs/keep.md"), "x");
+        write(&root.join("notes/HEAD"), "x");
+
+        let tree = build_tree(root, &CapsCache::new());
+        let names: Vec<&str> = tree.iter().map(|n| n.name.as_str()).collect();
+        for hidden in SYNC_STORE_ARTIFACT_NAMES {
+            assert!(
+                !names.contains(hidden),
+                "{hidden} should be hidden but found in tree: {names:?}"
+            );
+        }
+        let notes = find(&tree, "notes").unwrap();
+        assert!(find(notes.children.as_ref().unwrap(), "blobs").is_some());
+        assert!(find(notes.children.as_ref().unwrap(), "HEAD").is_some());
+
+        // Root refreshes via list_children apply the same filter.
+        let children = list_children(root, root, &CapsCache::new()).unwrap();
+        let names: Vec<&str> = children.iter().map(|n| n.name.as_str()).collect();
+        for hidden in SYNC_STORE_ARTIFACT_NAMES {
+            assert!(!names.contains(hidden), "{hidden} leaked via refresh");
+        }
     }
 
     #[test]

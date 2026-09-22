@@ -34,8 +34,18 @@ pub struct FileEntry {
 /// Directories never entered and files never synced.
 /// Must stay a superset of the watcher's ignore rules so sync state and
 /// catalog SQLite never travel through the blob store.
+///
+/// Mirrored sync-store artifacts (`blobs/`, `manifests/`, `HEAD`,
+/// `vault.json`) are matched at any depth, unlike the file tree's root-only
+/// rule: the store can sit in a user-named subfolder of a mirrored target,
+/// and scanning it would feed the engine's own output back into the blob
+/// store — a loop that bloats the remote every pass. The cost: a nested user
+/// path that happens to share one of these names (e.g. `notes/blobs/`)
+/// silently stops syncing — edits stay local, nothing propagates or deletes.
 pub(crate) fn is_ignored_name(name: &str) -> bool {
-    matches!(name, ".agentero" | ".git" | "node_modules" | ".DS_Store") || name.ends_with(".tmp")
+    matches!(name, ".agentero" | ".git" | "node_modules" | ".DS_Store")
+        || name.ends_with(".tmp")
+        || crate::features::vault::tree::is_sync_store_artifact(name)
 }
 
 /// Which bulky, re-derivable paper assets participate in sync. Notes,
@@ -222,6 +232,27 @@ mod tests {
         base.files.insert("papers/x/NOTES.md".into(), entry);
         let again = scan_vault(&vault, &base, &SyncScope::all()).unwrap();
         assert_eq!(again["papers/x/NOTES.md"].hash, "sentinel");
+
+        let _ = fs::remove_dir_all(&vault);
+    }
+
+    #[test]
+    fn scan_skips_mirrored_sync_store_artifacts() {
+        let vault = std::env::temp_dir().join(format!("agentero-scan-{}", Uuid::new_v4()));
+        fs::create_dir_all(vault.join("papers/x")).unwrap();
+        fs::create_dir_all(vault.join("store/blobs/ab")).unwrap();
+        fs::write(vault.join("papers/x/NOTES.md"), b"# x\n").unwrap();
+        // A store mirrored at the vault root...
+        fs::create_dir_all(vault.join("blobs/ab")).unwrap();
+        fs::write(vault.join("blobs/ab/hash"), b"blob").unwrap();
+        fs::write(vault.join("HEAD"), b"{}").unwrap();
+        fs::write(vault.join("vault.json"), b"{}").unwrap();
+        // ...and one in a user-named subfolder of a mirrored target.
+        fs::write(vault.join("store/blobs/ab/hash"), b"blob").unwrap();
+        fs::write(vault.join("store/HEAD"), b"{}").unwrap();
+
+        let files = scan_vault(&vault, &Manifest::default(), &SyncScope::all()).unwrap();
+        assert_eq!(files.keys().collect::<Vec<_>>(), vec!["papers/x/NOTES.md"]);
 
         let _ = fs::remove_dir_all(&vault);
     }

@@ -747,6 +747,19 @@ mod tests {
         assert!(gunzip_limited(&packed, 4095).is_err());
     }
 
+    /// The remote layout's artifact names must stay covered by the shared
+    /// ignore list, or a mirrored store would leak back into the blob store.
+    #[test]
+    fn store_artifact_names_cover_the_remote_layout() {
+        use agentero_core::features::vault::tree::SYNC_STORE_ARTIFACT_NAMES;
+        for key in [HEAD_KEY, VAULT_KEY, "blobs", "manifests"] {
+            assert!(
+                SYNC_STORE_ARTIFACT_NAMES.contains(&key),
+                "{key} missing from SYNC_STORE_ARTIFACT_NAMES"
+            );
+        }
+    }
+
     /// Full two-device round trip against a live S3 endpoint.
     ///
     /// ```sh
