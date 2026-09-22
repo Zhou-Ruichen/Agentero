@@ -309,7 +309,7 @@ caches PDF pages and notes locally and routes them through the
 end-to-end encrypted relay between the device and the user's own
 computer; nothing is uploaded to Apple. `NSLocalNetworkUsageDescription`
 is declared but only used by `pnpm tauri ios dev` over
-`http://localhost:1420`; it is not used in the production App Store
+`http://localhost:15173`; it is not used in the production App Store
 build.
 
 **Future collection (roadmap, not in this submission):** a later

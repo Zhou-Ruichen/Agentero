@@ -8,7 +8,7 @@ import { defineConfig } from "vite";
 // @ts-expect-error process is a nodejs global
 const host = process.env.TAURI_DEV_HOST;
 // @ts-expect-error process is a nodejs global
-const port = Number(process.env.TAURI_DEV_PORT) || 1420;
+const port = Number(process.env.TAURI_DEV_PORT) || 15173;
 
 // https://vite.dev/config/
 export default defineConfig(async () => ({
@@ -56,7 +56,7 @@ export default defineConfig(async () => ({
 		port,
 		strictPort: true,
 		// iOS Simulator reaches the Mac dev server through the local network
-		// bridge; binding only to loopback makes localhost:1420 unreachable.
+		// bridge; binding only to loopback makes localhost:15173 unreachable.
 		host: host || "0.0.0.0",
 		hmr: host
 			? {

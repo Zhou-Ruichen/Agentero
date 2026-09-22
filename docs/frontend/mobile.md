@@ -413,7 +413,7 @@ pnpm tauri ios init
 pnpm tauri ios dev "iPhone 17 Pro"
 ```
 
-开发模式使用 Vite 的 `http://localhost:1420`。开发服务器必须在 App
+开发模式使用 Vite 的 `http://localhost:15173`。开发服务器必须在 App
 运行期间保持启动；不要使用会在部署完成后退出并关闭 Vite 的一次性命令。
 首次启动时，如果 iOS 请求本地网络权限，需要允许 Agentero 访问本地网络。
 
@@ -436,7 +436,7 @@ Apple Development Team 和签名证书。
 
 ### 13.4 正式构建
 
-正式构建会把前端打包进 App，不依赖 Vite 或 `localhost:1420`：
+正式构建会把前端打包进 App，不依赖 Vite 或 `localhost:15173`：
 
 ```bash
 pnpm ios:release:check
