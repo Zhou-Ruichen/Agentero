@@ -6,8 +6,11 @@ import {
 	feedMentionPath,
 	isPlazaMentionPath,
 	lookupPlazaMention,
+	PLAZA_ARXIV_REC_COLLECTION_PATH,
 	type PlazaMentionEntry,
+	parseNeedFulltextIds,
 	plazaMentionArxivId,
+	plazaMentionPathForArxivId,
 	plazaMentionPromptBlock,
 	plazaMentionSource,
 	registerPlazaMentionEntries,
@@ -252,5 +255,94 @@ describe("assembleTurnPrompt with plaza mentions", () => {
 		expect(prompt).toContain(`read-only): ${markdownPath}`);
 		expect(prompt).toContain("composer.plazaScratchInstruction");
 		registerPlazaMentionEntries([]);
+	});
+});
+
+describe("arXiv Daily collection mention", () => {
+	const collectionEntry: PlazaMentionEntry = {
+		path: PLAZA_ARXIV_REC_COLLECTION_PATH,
+		source: "arxiv-rec",
+		title: "今日推荐（2 篇）",
+		url: null,
+		abstract: null,
+		publishedAt: null,
+		sourceLabel: "arXiv Daily",
+	};
+	const rec2: PlazaMentionEntry = {
+		...recEntry,
+		path: arxivRecMentionPath("2409.54321v1"),
+		title: "GPU Kernel Fusion Limits",
+	};
+
+	it("expands to a numbered catalog with the orchestration instruction", () => {
+		registerPlazaMentionEntries([collectionEntry, recEntry, rec2]);
+		const block = plazaMentionPromptBlock({
+			plazaPaths: [PLAZA_ARXIV_REC_COLLECTION_PATH],
+			t,
+		});
+		expect(block).toContain(`### ${collectionEntry.title}`);
+		expect(block).toContain(`[1] 2409.12345 · ${recEntry.title}`);
+		expect(block).toContain(`[2] 2409.54321 · ${rec2.title}`);
+		expect(block).toContain(recEntry.abstract ?? "");
+		expect(block).toContain("composer.plazaCollectionInstruction");
+		// No per-entry metadata block for the collection path itself.
+		expect(block).not.toContain("- Source: arXiv Daily");
+		registerPlazaMentionEntries([]);
+	});
+
+	it("degrades to the unavailable note when the collection is unregistered", () => {
+		registerPlazaMentionEntries([recEntry]);
+		const block = plazaMentionPromptBlock({
+			plazaPaths: [PLAZA_ARXIV_REC_COLLECTION_PATH],
+			t,
+		});
+		expect(block).toContain("composer.plazaEntryUnavailable");
+		registerPlazaMentionEntries([]);
+	});
+
+	it("resolves mention paths for NEED_FULLTEXT ids across sources", () => {
+		registerPlazaMentionEntries([
+			collectionEntry,
+			rec2,
+			{ ...feedEntry, url: "https://arxiv.org/abs/2501.00003" },
+		]);
+		expect(plazaMentionPathForArxivId("2409.54321v2")).toBe(rec2.path);
+		expect(plazaMentionPathForArxivId("2501.00003")).toBe(feedEntry.path);
+		expect(plazaMentionPathForArxivId("1907.00000")).toBeNull();
+		registerPlazaMentionEntries([]);
+	});
+
+	it("keeps the pinned collection visible at an empty query", () => {
+		const options = {
+			candidates: ["notes", recEntry.path, PLAZA_ARXIV_REC_COLLECTION_PATH],
+			query: "",
+			labelsByPath: new Map(),
+			pinned: [PLAZA_ARXIV_REC_COLLECTION_PATH],
+		};
+		const visible = filterMentionOptions(options);
+		expect(visible).toContain(PLAZA_ARXIV_REC_COLLECTION_PATH);
+		expect(visible).not.toContain(recEntry.path);
+	});
+});
+
+describe("parseNeedFulltextIds", () => {
+	it("parses ids from the first line, dedupes and caps at 3", () => {
+		expect(
+			parseNeedFulltextIds(
+				"NEED_FULLTEXT 2409.12345 2409.54321v2 2409.12345 2607.23250 2609.20723",
+			),
+		).toEqual(["2409.12345", "2409.54321", "2607.23250"]);
+	});
+
+	it("ignores markers that are not the first non-empty line", () => {
+		expect(
+			parseNeedFulltextIds("分析如下……\nNEED_FULLTEXT 2409.12345"),
+		).toBeNull();
+	});
+
+	it("rejects lines without valid ids and plain text", () => {
+		expect(parseNeedFulltextIds("NEED_FULLTEXT")).toBeNull();
+		expect(parseNeedFulltextIds("NEED_FULLTEXT some-words")).toBeNull();
+		expect(parseNeedFulltextIds("以下是最终报告。")).toBeNull();
 	});
 });

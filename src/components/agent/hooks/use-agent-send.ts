@@ -52,7 +52,11 @@ import {
 	stripInlineTokens,
 } from "@/lib/agent/composer-inline-tokens";
 import type { AgentComposerState } from "@/lib/agent/composer-state";
-import { isPlazaMentionPath } from "@/lib/agent/plaza-mention";
+import {
+	isPlazaMentionPath,
+	parseNeedFulltextIds,
+	plazaMentionPathForArxivId,
+} from "@/lib/agent/plaza-mention";
 import { preparePlazaScratch } from "@/lib/agent/plaza-scratch";
 import {
 	consumeSelections,
@@ -788,6 +792,50 @@ export function useAgentSend({
 
 	const sendRef = useRef(send);
 	sendRef.current = send;
+
+	/**
+	 * NEED_FULLTEXT auto-continuation: a finished plaza-catalog turn whose
+	 * reply starts with `NEED_FULLTEXT <id>…` asked for specific full texts.
+	 * Prepare their scratch copies (existing host command) and auto-send a
+	 * follow-up turn carrying the papers, so the user goes from topic filter
+	 * to final report without manual @-ing. One shot per runtime session id;
+	 * skipped whenever the user has taken over (queued a message).
+	 */
+	const handledNeedFulltextRef = useRef(new Set<string>());
+	useEffect(() => {
+		if (activeTabIsRunning || submitting || switching) return;
+		if (messageQueue.length > 0) return;
+		const last = lines[lines.length - 1];
+		if (last?.kind !== "agent") return;
+		const replyText = last.parts
+			.filter(
+				(part): part is { type: "text"; id: string; text: string } =>
+					part.type === "text",
+			)
+			.map((part) => part.text)
+			.join("\n");
+		const ids = parseNeedFulltextIds(replyText);
+		if (!ids) return;
+		if (!activeTabId || handledNeedFulltextRef.current.has(activeTabId)) {
+			return;
+		}
+		handledNeedFulltextRef.current.add(activeTabId);
+		const paths = ids
+			.map((id) => plazaMentionPathForArxivId(id))
+			.filter((path): path is string => Boolean(path));
+		if (paths.length === 0) return;
+		void sendRef.current(t("composer.plazaFulltextFollowup"), {
+			contextPaths: paths,
+		});
+	}, [
+		activeTabId,
+		activeTabIsRunning,
+		lines,
+		messageQueue.length,
+		submitting,
+		switching,
+		t,
+	]);
 
 	// PDF pin modal submits through the same send pipeline. Keep handler in a
 	// ref so we only register once (avoids store setState on every render).

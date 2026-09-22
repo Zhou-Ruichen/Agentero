@@ -57,6 +57,7 @@ import {
 	mentionPathHasChildren,
 	pushRecentMentionPath,
 } from "@/lib/agent/mention";
+import { isPlazaCollectionPath } from "@/lib/agent/plaza-mention";
 import { stripPromptEnvelopeForDisplay } from "@/lib/agent/prompt-display";
 import {
 	removeSelection,
@@ -337,6 +338,14 @@ export function useAgentComposer({
 		}
 	}, [composerMenuDismissed, mentionMatch]);
 
+	/** Whole-list entries (the arXiv Daily collection) stay visible at `@`. */
+	const pinnedMentionPaths = useMemo(() => {
+		const pinned = plazaMentionEntries
+			.map((entry) => entry.path)
+			.filter(isPlazaCollectionPath);
+		return pinned.length ? pinned : null;
+	}, [plazaMentionEntries]);
+
 	const mentionOptions = useMemo(() => {
 		if (!mentionMatch) return [];
 		return filterMentionOptions({
@@ -346,6 +355,7 @@ export function useAgentComposer({
 			recent: recentMentionPaths,
 			labelsByPath: mentionSearchLabels,
 			browseRoot: mentionBrowseRoot,
+			pinned: pinnedMentionPaths,
 			limit: 8,
 		});
 	}, [
@@ -355,6 +365,7 @@ export function useAgentComposer({
 		mentionMatch,
 		mentionQuery,
 		mentionSearchLabels,
+		pinnedMentionPaths,
 		recentMentionPaths,
 	]);
 
