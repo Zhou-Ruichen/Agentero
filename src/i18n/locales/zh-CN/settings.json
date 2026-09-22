@@ -353,7 +353,8 @@
 			"defaultName": "Desktop",
 			"name": "名称",
 			"command": "命令",
-			"args": "参数"
+			"args": "参数",
+			"hint": "在当前 Vault 中启动该命令，经标准输入/输出连接 ACP。参数按空格拆分。例如命令 opencode、参数 acp；或 Python 解释器绝对路径，参数为 bridge 脚本的绝对路径。"
 		},
 		"uninstallDialog": {
 			"title": "卸载 {{name}}？",

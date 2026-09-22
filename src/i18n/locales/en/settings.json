@@ -353,7 +353,8 @@
 			"defaultName": "Desktop",
 			"name": "Name",
 			"command": "Command",
-			"args": "Args"
+			"args": "Args",
+			"hint": "Starts this command in the current Vault and connects over ACP on stdin/stdout. Arguments are split on spaces. Example: command opencode, args acp; or an absolute Python path with the bridge script’s absolute path as args."
 		},
 		"uninstallDialog": {
 			"title": "Uninstall {{name}}?",

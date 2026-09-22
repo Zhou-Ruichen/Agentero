@@ -78,6 +78,9 @@ export function AgentCustomForm({
 			</div>
 			{adding ? (
 				<div className="space-y-2.5 border-b px-3.5 py-3 last:border-b-0">
+					<p className="text-muted-foreground text-xs leading-relaxed">
+						{t("agent.form.hint")}
+					</p>
 					<div className="space-y-1">
 						<Label className="font-normal text-sm">
 							{t("agent.form.name")}

@@ -14,6 +14,8 @@ Agentero 使用 **BYOA**（Bring Your Own Agent）：Agent 由你安装和登录
 - [GenericAgent ACP](genericagent-acp.md)
 - 自定义 `command` / `args` / `env`
 
+自定义项与内置目录相同：Agentero 在当前 Vault 根目录启动你填写的命令，经标准输入/输出走 ACP。参数按空格拆分。命令本身必须是 ACP 服务（如 `opencode acp`、`grok agent stdio`），或指向一个 ACP bridge（如 `python /绝对路径/bridge.py`）。脚本和解释器请用绝对路径；图形应用的 PATH 往往和终端不一致。设置里新增或编辑自定义 Agent 时会显示同一段说明。
+
 请先按对应 Agent 的官方说明完成安装和登录。
 
 若要把当前 Vault 接到 ChatGPT 或其它 MCP 客户端（不走应用内 ACP 面板），见 [用 MCP 连接外部 Agent](mcp.md)。
