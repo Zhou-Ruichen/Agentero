@@ -179,6 +179,94 @@ fn collect_choices_from_select(
     models
 }
 
+/// Fallback model selector extraction for agents that still expose the
+/// pre-stabilization top-level `models` field on `session/new` (e.g. hermes-agent
+/// before it migrated to `configOptions`, see NousResearch/hermes-agent#81067).
+///
+/// The official ACP Rust schema drops the field on deserialize, so the caller
+/// passes the raw `session/new` response `serde_json::Value` (obtained via an
+/// `UntypedMessage` request) and we read `result.models` here.
+///
+/// Shape: `{ "models": { "availableModels": [{ "modelId", "name", ... }],
+///                       "currentModelId": "..." } }`.
+pub(crate) fn models_from_session_models_value(
+    session_id: &str,
+    agent_id: &str,
+    value: &serde_json::Value,
+) -> Option<AgentModelsEvent> {
+    let models_obj = value.get("models")?;
+
+    let available = models_obj.get("availableModels")?.as_array()?;
+    let mut models = Vec::with_capacity(available.len());
+    for entry in available {
+        let id = entry
+            .get("modelId")
+            .and_then(|v| v.as_str())?
+            .trim()
+            .to_string();
+        if id.is_empty() {
+            continue;
+        }
+        let name = entry
+            .get("name")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|n| !n.is_empty())
+            .unwrap_or(&id)
+            .to_string();
+        // Provider prefix ("opencode-zen:..." → group "opencode-zen") keeps the
+        // picker's provider grouping that the config-options path gets for free.
+        let group = id
+            .split_once(':')
+            .map(|(prefix, _)| prefix.trim().to_string())
+            .filter(|g| !g.is_empty());
+        models.push(AgentModelChoice { id, name, group });
+    }
+    let mut models = dedupe_model_choices(models);
+    if models.is_empty() {
+        return None;
+    }
+
+    let current_id = models_obj
+        .get("currentModelId")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    if !current_id.is_empty() && !models.iter().any(|m| m.id == current_id) {
+        models.insert(
+            0,
+            AgentModelChoice {
+                id: current_id.clone(),
+                name: current_id.clone(),
+                group: None,
+            },
+        );
+    }
+    let current_id = if current_id.is_empty() {
+        models[0].id.clone()
+    } else {
+        current_id
+    };
+
+    log::debug!(
+        target: "agentero::agent",
+        "agent={} using legacy top-level session models field: count={} current={}",
+        agent_id,
+        models.len(),
+        current_id
+    );
+    Some(AgentModelsEvent {
+        session_id: session_id.to_string(),
+        agent_id: agent_id.to_string(),
+        // The legacy field carries no config option id; the picker only needs a
+        // stable key for persistence, and "model" matches the standard option id.
+        config_id: "model".to_string(),
+        current_id,
+        models,
+    })
+}
+
 /// Extract model selector catalog from ACP session config options.
 pub(crate) fn models_from_config_options(
     session_id: &str,
@@ -873,5 +961,87 @@ mod config_option_tests {
         let models = models_from_config_options("session", "codex", &options)
             .expect("model selector should be exposed");
         assert_eq!(models.models.iter().filter(|m| m.id == "gpt-5").count(), 1);
+    }
+}
+
+#[cfg(test)]
+mod session_models_fallback_tests {
+    use super::models_from_session_models_value;
+
+    #[test]
+    fn parses_legacy_top_level_models_field() {
+        let value = serde_json::json!({
+            "sessionId": "sess-1",
+            "models": {
+                "availableModels": [
+                    { "modelId": "moa:default", "name": "Mixture of Agents · default", "description": "Provider: Mixture of Agents" },
+                    { "modelId": "opencode-zen:claude-fable-5-1", "name": "OpenCode Zen · claude-fable-5-1" },
+                    { "modelId": "opencode-zen:deepseek-v4.1-flash", "name": "OpenCode Zen · deepseek-v4.1-flash" }
+                ],
+                "currentModelId": "opencode-zen:claude-fable-5-1"
+            }
+        });
+
+        let ev = models_from_session_models_value("sess-1", "hermes", &value)
+            .expect("legacy models field should be parsed");
+        assert_eq!(ev.config_id, "model");
+        assert_eq!(ev.current_id, "opencode-zen:claude-fable-5-1");
+        assert_eq!(ev.models.len(), 3);
+        assert!(ev.models.iter().any(|m| m.id == "moa:default"));
+        // provider prefix becomes the picker group
+        let zen = ev
+            .models
+            .iter()
+            .find(|m| m.id == "opencode-zen:deepseek-v4.1-flash")
+            .expect("zen model");
+        assert_eq!(zen.group.as_deref(), Some("opencode-zen"));
+    }
+
+    #[test]
+    fn returns_none_when_models_field_missing() {
+        let value = serde_json::json!({ "sessionId": "sess-1" });
+        assert!(models_from_session_models_value("sess-1", "hermes", &value).is_none());
+    }
+
+    #[test]
+    fn returns_none_when_available_models_empty() {
+        let value = serde_json::json!({
+            "sessionId": "sess-1",
+            "models": { "availableModels": [], "currentModelId": "x" }
+        });
+        assert!(models_from_session_models_value("sess-1", "hermes", &value).is_none());
+    }
+
+    #[test]
+    fn injects_current_model_when_not_in_available_list() {
+        let value = serde_json::json!({
+            "sessionId": "sess-1",
+            "models": {
+                "availableModels": [
+                    { "modelId": "moa:default", "name": "Mixture of Agents · default" }
+                ],
+                "currentModelId": "gateway:custom-model"
+            }
+        });
+
+        let ev = models_from_session_models_value("sess-1", "hermes", &value).expect("models");
+        assert_eq!(ev.current_id, "gateway:custom-model");
+        assert_eq!(ev.models[0].id, "gateway:custom-model");
+        assert!(ev.models.iter().any(|m| m.id == "moa:default"));
+    }
+
+    #[test]
+    fn defaults_current_to_first_model_when_absent() {
+        let value = serde_json::json!({
+            "sessionId": "sess-1",
+            "models": {
+                "availableModels": [
+                    { "modelId": "moa:default", "name": "Mixture of Agents · default" }
+                ]
+            }
+        });
+
+        let ev = models_from_session_models_value("sess-1", "hermes", &value).expect("models");
+        assert_eq!(ev.current_id, "moa:default");
     }
 }
