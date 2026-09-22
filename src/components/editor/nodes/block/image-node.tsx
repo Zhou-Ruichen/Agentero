@@ -101,7 +101,8 @@ export function ImageElement(props: PlateElementProps<TImageElement>) {
 							imageGroup
 								? "h-full w-full rounded-sm object-contain"
 								: "max-w-full rounded-sm",
-							active && "ring-2 ring-ring ring-offset-2 ring-offset-background",
+							active &&
+								"ring-2 ring-default-ring ring-offset-2 ring-offset-background",
 						)}
 						loading={exportMode ? "eager" : "lazy"}
 						draggable={false}
@@ -119,7 +120,8 @@ export function ImageElement(props: PlateElementProps<TImageElement>) {
 					<div
 						className={cn(
 							"rounded-sm border border-dashed border-border px-3 py-6 text-center text-muted-foreground text-sm",
-							active && "ring-2 ring-ring ring-offset-2 ring-offset-background",
+							active &&
+								"ring-2 ring-default-ring ring-offset-2 ring-offset-background",
 						)}
 					>
 						{url}

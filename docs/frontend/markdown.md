@@ -45,7 +45,7 @@ Plate WYSIWYG；用于普通笔记与论文 `NOTES.md`。磁盘上始终是标�
 |---|---|
 | 落盘 | `{mdDir}/assets/`；正文 `![alt](./assets/file.ext)`（Obsidian 兼容） |
 | 插入 | 粘贴 / 工具栏 → `writeVaultBytes` |
-| 预览 | 相对路径 → fs `readFile` → `blob:`；**选中**节点显示 Markdown 源码 |
+| 预览 | 相对路径 → fs `readFile` → `blob:`；**选中**节点显示 Markdown 源码。选中描边固定为默认主题的 ring（不跟随外观配色） |
 | GC | 引用计数归零且 managed `./assets/` 时删除文件 |
 
 ## 数据流

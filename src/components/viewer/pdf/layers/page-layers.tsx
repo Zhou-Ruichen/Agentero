@@ -748,7 +748,7 @@ export const PdfPageLayers = memo(function PdfPageLayers({
 									// Click crops in place; pointer cursor is reserved for
 									// navigation (citation links).
 									className={cn(
-										"group absolute z-[2] cursor-crosshair rounded-none border-0 bg-transparent p-0 transition-colors hover:bg-primary/5",
+										"group absolute z-[2] cursor-crosshair rounded-none border-0 bg-transparent p-0 transition-colors hover:bg-default-primary/5",
 									)}
 									style={{
 										left: `${region.bbox.x * 100}%`,
@@ -876,7 +876,7 @@ export const PdfPageLayers = memo(function PdfPageLayers({
 						aria-label={t("pdfExplain.cropping")}
 					>
 						<Loader2
-							className="size-4 animate-spin text-primary"
+							className="size-4 animate-spin text-default-primary"
 							aria-hidden="true"
 						/>
 					</div>
@@ -912,7 +912,7 @@ export const PdfPageLayers = memo(function PdfPageLayers({
 						aria-hidden="true"
 					/>
 				) : null}
-				{/* Active visual mark: theme outline of the crop region. */}
+				{/* Active visual mark: default-theme outline of the crop region. */}
 				{activeVisualOnPage
 					? activeVisualOnPage.rects.map((rect) => (
 							<div
