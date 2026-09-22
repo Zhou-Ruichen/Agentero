@@ -18,6 +18,7 @@ import {
 } from "@/lib/settings";
 import { initSettingsStore } from "@/lib/settings/react-store";
 import { applyNativeWindowTheme } from "@/lib/shell/native-window-theme";
+import { initShellLayoutFromPrefs } from "@/lib/shell/ui-store";
 import { applyUiTheme } from "@/lib/ui/theme";
 import { checkForUpdate, installAvailableUpdate } from "@/lib/update";
 import { initVaultStore } from "@/lib/vault/store";
@@ -199,6 +200,7 @@ async function boot() {
 	initSettingsStore();
 	initVaultStore();
 	initWorkspaceStore();
+	if (!isMobileApp()) initShellLayoutFromPrefs();
 	ReactDOM.createRoot(root).render(
 		<PdfEngineHost>
 			{/* HTML5Backend cannot remount under StrictMode — drag sources go dead. */}

@@ -1,6 +1,5 @@
-import type { LayoutMode } from "@/lib/shell/ui-store";
-
-export type LayoutPresetMode = Exclude<LayoutMode, "custom">;
+/** Layout presets selectable from the title-bar menu (no free-form mode). */
+export type LayoutPresetMode = "agent" | "notes" | "reading";
 
 /** Fraction of the source + Agent area occupied by the Agent rail. */
 export const LAYOUT_MODE_RIGHT_RATIOS: Record<LayoutPresetMode, number> = {

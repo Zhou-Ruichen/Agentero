@@ -8,6 +8,12 @@ import { type RefObject, useEffect, useMemo, useRef } from "react";
 import { usePanelRef } from "react-resizable-panels";
 import { prefersReducedMotion } from "@/lib/core/motion";
 import {
+	getShellLayoutPrefs,
+	type RailLimits,
+	railWidthsForSlot,
+	seedBootWidths,
+} from "@/lib/shell/layout-persist";
+import {
 	type LayoutPresetMode,
 	layoutModeLeftCollapsed,
 	layoutModeRightCollapsed,
@@ -15,6 +21,7 @@ import {
 } from "@/lib/shell/layout-presets";
 import {
 	registerLayoutController,
+	setLastAppliedPreset,
 	setLayoutMode,
 	setRightSidebarOpenState,
 	setSidebarCollapsedState,
@@ -25,6 +32,20 @@ import { tabHasNotesSplit, tabNotesEligible } from "@/lib/workspace/tabs";
 
 export const SIDEBAR_DEFAULT_PX = 200;
 export const RIGHT_SIDEBAR_DEFAULT_PX = 320;
+// Keep in sync with the Panel min/max constraints in App.tsx.
+export const SIDEBAR_MIN_PX = 160;
+export const SIDEBAR_MAX_RATIO = 0.3;
+export const RIGHT_SIDEBAR_MIN_PX = 260;
+export const RIGHT_SIDEBAR_MAX_RATIO = 0.5;
+
+const LEFT_LIMITS: RailLimits = {
+	minPx: SIDEBAR_MIN_PX,
+	maxRatio: SIDEBAR_MAX_RATIO,
+};
+const RIGHT_LIMITS: RailLimits = {
+	minPx: RIGHT_SIDEBAR_MIN_PX,
+	maxRatio: RIGHT_SIDEBAR_MAX_RATIO,
+};
 
 export type ShellLayout = {
 	sidebarPanelRef: ReturnType<typeof usePanelRef>;
@@ -35,6 +56,9 @@ export type ShellLayout = {
 	/** Last expanded rail widths in px (survive collapse / PDF immersive round-trips). */
 	leftWidthPxRef: RefObject<number>;
 	rightWidthPxRef: RefObject<number>;
+	/** Restored boot widths (remembered ratios × current window, clamped). */
+	initialLeftPx: number;
+	initialRightPx: number;
 	/** Which rail is running a programmatic collapse/expand transition. */
 	animatingRailRef: RefObject<"left" | "right" | "both" | null>;
 	cancelRailAnimation: () => void;
@@ -49,8 +73,21 @@ export function useShellLayout(): ShellLayout {
 	const sourcePanelRef = usePanelRef();
 	const sidebarAsideRef = useRef<HTMLElement>(null);
 	const editorPaneRef = useRef<HTMLDivElement>(null);
-	const leftWidthPxRef = useRef(SIDEBAR_DEFAULT_PX);
-	const rightWidthPxRef = useRef(RIGHT_SIDEBAR_DEFAULT_PX);
+	// Seed from persisted per-layout ratios so the first paint already matches
+	// the remembered arrangement (see lib/shell/layout-persist.ts).
+	const bootWidths = useMemo(
+		() =>
+			seedBootWidths(
+				getShellLayoutPrefs(),
+				window.innerWidth,
+				LEFT_LIMITS,
+				RIGHT_LIMITS,
+				{ leftPx: SIDEBAR_DEFAULT_PX, rightPx: RIGHT_SIDEBAR_DEFAULT_PX },
+			),
+		[],
+	);
+	const leftWidthPxRef = useRef(bootWidths.leftPx);
+	const rightWidthPxRef = useRef(bootWidths.rightPx);
 	const animatingRailRef = useRef<"left" | "right" | "both" | null>(null);
 	const railAnimTimerRef = useRef({ left: 0, right: 0 });
 
@@ -194,6 +231,23 @@ export function useShellLayout(): ShellLayout {
 			setRightSidebarOpenState(!collapsed);
 		};
 
+		/** Expand + resize the Agent rail to an absolute pixel width. */
+		const setRightPx = (px: number) => {
+			const panel = rightSidebarPanelRef.current;
+			if (!panel) return;
+			const el = document.getElementById("right-sidebar");
+			withRailAnimation("right", el, () => {
+				try {
+					panel.expand();
+					panel.resize(px);
+				} catch {
+					// ignore
+				}
+			});
+			rightWidthPxRef.current = px;
+			setRightSidebarOpenState(true);
+		};
+
 		/** Resize the Agent rail as a fraction of the source + Agent area. */
 		const setRightRatio = (ratio: number) => {
 			const panel = rightSidebarPanelRef.current;
@@ -201,32 +255,39 @@ export function useShellLayout(): ShellLayout {
 			if (!panel || !source) return;
 			const total = source.getSize().inPixels + panel.getSize().inPixels;
 			if (total <= 0) return;
-			const targetPx = Math.round(total * ratio);
-			const el = document.getElementById("right-sidebar");
-			withRailAnimation("right", el, () => {
-				try {
-					panel.expand();
-					panel.resize(targetPx);
-				} catch {
-					// ignore
-				}
-			});
-			rightWidthPxRef.current = targetPx;
-			setRightSidebarOpenState(true);
+			setRightPx(Math.round(total * ratio));
 		};
 
 		const applyLayoutMode = (mode: LayoutPresetMode) => {
+			// Prefer the widths remembered for this mode; fall back to the
+			// static preset ratios on first use.
+			const saved = railWidthsForSlot(
+				getShellLayoutPrefs(),
+				mode,
+				window.innerWidth,
+				LEFT_LIMITS,
+				RIGHT_LIMITS,
+			);
+			// Seed the remembered width before collapsing so a later manual
+			// reopen (setLeftCollapsed(false) / setRightCollapsed(false))
+			// restores this mode's width instead of the static default.
+			if (saved.leftPx !== undefined) leftWidthPxRef.current = saved.leftPx;
 			setLeftCollapsed(layoutModeLeftCollapsed(mode));
 
 			if (mode === "notes") setNotesSplit(true, { preserveLayoutMode: true });
 			else setNotesSplit(false, { preserveLayoutMode: true });
 
 			if (layoutModeRightCollapsed(mode)) {
+				if (saved.rightPx !== undefined)
+					rightWidthPxRef.current = saved.rightPx;
 				setRightCollapsed(true);
+			} else if (saved.rightPx !== undefined) {
+				setRightPx(saved.rightPx);
 			} else {
 				setRightRatio(layoutModeRightRatio(mode));
 			}
 			setLayoutMode(mode);
+			setLastAppliedPreset(mode);
 		};
 
 		const focusSidebar = () => {
@@ -288,6 +349,8 @@ export function useShellLayout(): ShellLayout {
 		editorPaneRef,
 		leftWidthPxRef,
 		rightWidthPxRef,
+		initialLeftPx: bootWidths.leftPx,
+		initialRightPx: bootWidths.rightPx,
 		animatingRailRef,
 		cancelRailAnimation: controller.cancelRailAnimation,
 	};
