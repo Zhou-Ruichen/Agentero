@@ -27,7 +27,7 @@ Host commands：`mcp_get_status` / `mcp_set_enabled` / `mcp_set_port` / `mcp_set
 
 ## ChatGPT Secure MCP Tunnel
 
-App 开着且 MCP 开关打开后，可在同一设置区填写 Tunnel ID 与 Runtime API key，点 **Start** 让 Agentero 直接 spawn 并持有 `tunnel-client run`。按钮旁绿点表示隧道已连通控制平面；**注意 `/readyz` 返回 200 不代表认证成功**，真正的 ready 信号是 `tunnel-client health --require-control-plane-poll` 的 `control_plane_poll.ok=true`。
+App 开着且 MCP 开关打开后，设置区按界面顺序填写：先 **Runtime API key**，再 **Tunnel ID**，装好 `tunnel-client` 后点 **Start**。Agentero 随即 spawn 并持有 `tunnel-client run`。按钮旁绿点表示隧道已连通控制平面；**注意 `/readyz` 返回 200 不代表认证成功**，真正的 ready 信号是 `tunnel-client health --require-control-plane-poll` 的 `control_plane_poll.ok=true`。
 
 隧道子进程随 Agentero 退出而停止（`RunEvent::Exit` 里 kill），设置区 **Stop** 与关闭 MCP 开关也会真正结束进程；宿主异常退出（崩溃、强杀）遗留的孤儿会在下次启动时按 `--profile-dir` 清扫。找不到 `tunnel-client` 时按钮禁用，并提示可复制安装命令 `brew install openai/tools/tunnel-client`，不会自动安装。该状态不是进程级缓存：`mcp_tunnel_status` 在未运行时重新 `resolve_command`，设置页在缺失期间每 2 秒拉一次状态，二进制出现后相位回到 `stopped`，不必重启应用。
 
