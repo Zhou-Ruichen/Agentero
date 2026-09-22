@@ -89,7 +89,7 @@ tunnel-client admin --json tunnels get tunnel_...   # 看 organization_ids / wor
 3. 点 **Start**。按钮旁状态从 **Stopped** → **Starting…** → **Connected**（≤30 秒）。
 4. 点 **Stop** 或退出 Agentero 都会停掉隧道；改 MCP 端口时也会自动停隧道，需要再点一次 Start。
 
-如果按钮禁用并提示 "tunnel-client not found"，先安装（§2），然后重新打开 Settings 页即可。
+如果按钮禁用并提示 "tunnel-client not found"，按提示安装（§2）。设置页会继续在 PATH 和常见安装目录里找 `tunnel-client`，找到后 Start 自动恢复，不必重启 Agentero，也不必重新打开设置。
 
 **注意**：`/readyz` 返回 200 不代表真的连上了；设置页显示 **Connected** 的依据是 `tunnel-client health --require-control-plane-poll` 成功，所以 bogus key 会显示 **Not connected**。
 
@@ -136,6 +136,7 @@ tunnel-client run --profile agentero
 - `paper_notes_get` / `paper_notes_write` — 读写该篇 `NOTES.md`
 - `paper_tag_add` / `paper_tag_rm` — 标签
 - `layout_list` / `layout_get` — 侧栏图/表/公式索引（需先在 App 跑版面分析）
+- `file_list` / `file_read` / `file_write` — 读改 Vault 里 `papers/` 以外的文本，例如自己的 `drafts/main.tex`。一次只列一层目录；不碰 `.agentero`、PDF 和 `NOTES.md`（笔记仍用 `paper_notes_write`）
 - Resources：`agentero://vault`、`agentero://agent-invariants`、`agentero://skills/agentero-cli`
 
 ## 常见问题
@@ -143,7 +144,7 @@ tunnel-client run --profile agentero
 | 现象 | 处理 |
 |---|---|
 | Agentero 没有绿点 | 先打开本地 Vault，再开 MCP 开关；端口占用则换 `mcpPort` |
-| Start 按钮禁用 / 显示 "tunnel-client not found" | 按提示安装 `brew install openai/tools/tunnel-client`，重新打开 Settings |
+| Start 按钮禁用 / 显示 "tunnel-client not found" | 按提示安装 `brew install openai/tools/tunnel-client`。装到 `/opt/homebrew/bin`、`/usr/local/bin` 或当前 PATH 后，设置页约 2 秒内自动恢复 Start，不必重启 |
 | 绿点一直 **Starting…** / **Not connected** | 检查 Runtime API key 是否有 Tunnels **Use**、Tunnel ID 是否正确、隧道是否关联目标 workspace；注意 `/readyz` 不能作为连通依据 |
 | ChatGPT 看不到隧道 | workspace 关联 + **Use**；connector 必须在 `Connected` 时创建 |
 | 工具调用失败 | Agentero 开关、隧道 **Connected** 都要在 |

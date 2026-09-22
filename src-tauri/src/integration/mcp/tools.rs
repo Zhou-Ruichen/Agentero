@@ -1,5 +1,6 @@
 //! MCP tools + ServerHandler.
 
+use super::files::{self, WriteMode as FileWriteMode};
 use super::icons;
 use super::layout;
 use super::notes::{self, WriteMode};
@@ -123,6 +124,35 @@ struct ImportIdArgs {
 #[serde(rename_all = "camelCase")]
 struct NotesWriteArgs {
     r#ref: String,
+    content: String,
+    /// `replace` (default) or `append`.
+    #[serde(default)]
+    mode: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct FileListArgs {
+    /// Vault-relative directory. Empty lists the vault root.
+    #[serde(default)]
+    path: Option<String>,
+    /// Default 200, capped at 500.
+    #[serde(default)]
+    limit: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct FileReadArgs {
+    /// Vault-relative text file, e.g. `drafts/main.tex`.
+    path: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct FileWriteArgs {
+    /// Vault-relative text file, e.g. `drafts/main.tex`.
+    path: String,
     content: String,
     /// `replace` (default) or `append`.
     #[serde(default)]
@@ -441,6 +471,67 @@ impl AgenteroMcp {
             Err(e) => Err(tool_err(e)),
         }
     }
+
+    #[tool(
+        description = "List one directory in the open vault (not the whole tree). path is vault-relative; omit it for the vault root. Skips .agentero, hidden dirs, and LaTeX build artifacts. Use this to find drafts such as main.tex outside papers/."
+    )]
+    async fn file_list(
+        &self,
+        Parameters(args): Parameters<FileListArgs>,
+    ) -> Result<Json<files::FileListOut>, CallToolResult> {
+        let vault = match self.ctrl.local_vault() {
+            Ok(v) => v,
+            Err(e) => return Err(tool_err(e)),
+        };
+        let limit = args.limit.unwrap_or(200).clamp(1, 500) as usize;
+        match files::list_dir(&vault, args.path.as_deref().unwrap_or(""), limit) {
+            Ok(out) => Ok(Json(out)),
+            Err(e) => Err(tool_err(e)),
+        }
+    }
+
+    #[tool(
+        description = "Read one UTF-8 text file by vault-relative path (e.g. drafts/main.tex or notes/idea.md). Refuses .agentero, binaries, marks, and layout indexes. Missing file is an error. NOTES.md is allowed here; prefer paper_notes_get for a paper."
+    )]
+    async fn file_read(
+        &self,
+        Parameters(args): Parameters<FileReadArgs>,
+    ) -> Result<Json<files::FileReadOut>, CallToolResult> {
+        let vault = match self.ctrl.local_vault() {
+            Ok(v) => v,
+            Err(e) => return Err(tool_err(e)),
+        };
+        match files::read_text(&vault, &args.path) {
+            Ok(out) => Ok(Json(out)),
+            Err(e) => Err(tool_err(e)),
+        }
+    }
+
+    #[tool(
+        description = "Write one UTF-8 text file by vault-relative path. mode=replace (default) or append. Creates missing parent directories inside the vault. Use for a LaTeX draft outside papers/. Refuses NOTES.md (use paper_notes_write), .agentero, binaries, marks, and layout indexes. Confirm with the user before replace."
+    )]
+    async fn file_write(
+        &self,
+        Parameters(args): Parameters<FileWriteArgs>,
+    ) -> Result<Json<files::FileWriteOut>, CallToolResult> {
+        let vault = match self.ctrl.local_vault() {
+            Ok(v) => v,
+            Err(e) => return Err(tool_err(e)),
+        };
+        let mode = match args.mode.as_deref().map(str::trim).unwrap_or("replace") {
+            "" | "replace" => FileWriteMode::Replace,
+            "append" => FileWriteMode::Append,
+            other => {
+                return Err(tool_err(AppError::message(format!(
+                    "mode must be replace or append, got {other}"
+                ))));
+            }
+        };
+        match files::write_text(&vault, &args.path, &args.content, mode) {
+            Ok(out) => Ok(Json(out)),
+            Err(e) => Err(tool_err(e)),
+        }
+    }
 }
 
 #[tool_handler]
@@ -457,7 +548,8 @@ impl ServerHandler for AgenteroMcp {
             "Read agentero://vault, then agentero://agent-invariants. ",
             "paper_list defaults to id/path/title only — pass fields or full when needed. ",
             "ref is a paper id or vault-relative path. Notes writes only touch NOTES.md. ",
-            "Confirm with the user before replace of user-written NOTES. ",
+            "Other vault text (a .tex draft outside papers/) uses file_list, file_read, and file_write. ",
+            "Confirm with the user before replace of user-written NOTES or other files. ",
             "Optional: agentero://skills/agentero-cli for the bundled CLI skill body."
         ))
         .with_server_info(
@@ -525,6 +617,21 @@ mod schema_tests {
             .and_then(|v| v.as_object())
             .expect("object properties");
         for key in ["path", "id", "title", "pdf", "tex", "paperMd"] {
+            assert!(props.contains_key(key), "missing {key} in {props:?}");
+        }
+    }
+
+    #[test]
+    fn file_read_advertises_output_schema() {
+        let tool = AgenteroMcp::file_read_tool_attr();
+        let schema = tool
+            .output_schema
+            .expect("file_read should advertise outputSchema");
+        let props = schema
+            .get("properties")
+            .and_then(|v| v.as_object())
+            .expect("object properties");
+        for key in ["path", "content", "bytes"] {
             assert!(props.contains_key(key), "missing {key} in {props:?}");
         }
     }

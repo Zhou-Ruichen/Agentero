@@ -37,7 +37,8 @@ pub fn vault_markdown(ctrl: &McpController) -> String {
                  - **papers**: {papers_n}\n\
                  - **unread**: {unread}\n\n\
                  Next: read `{INVARIANTS_URI}`, then `paper_list` (slim by default) / `paper_get`.\n\
-                 `ref` is a paper id or vault-relative path. Use `fields` or `full` on `paper_list` only when needed.\n",
+                 `ref` is a paper id or vault-relative path. Use `fields` or `full` on `paper_list` only when needed.\n\
+                 Text outside a paper record (for example `drafts/main.tex`): `file_list`, then `file_read` / `file_write`.\n",
                 vault.display()
             )
         }

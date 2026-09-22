@@ -2,6 +2,7 @@
 //!
 //! See `docs/backend/mcp.md`.
 
+mod files;
 mod icons;
 mod layout;
 mod notes;

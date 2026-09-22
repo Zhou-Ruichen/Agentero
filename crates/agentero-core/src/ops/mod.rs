@@ -140,6 +140,8 @@ mod tests {
         assert!(get("paper_list").is_some()); // mcp alias
         assert!(get("layout.list").is_some());
         assert!(get("paper.set_read").is_some());
+        assert!(get("file_read").is_some());
+        assert!(get("file.write").is_some());
         assert!(get("no.such.op").is_none());
     }
 

@@ -29,7 +29,7 @@ Host commands：`mcp_get_status` / `mcp_set_enabled` / `mcp_set_port` / `mcp_set
 
 App 开着且 MCP 开关打开后，可在同一设置区填写 Tunnel ID 与 Runtime API key，点 **Start** 让 Agentero 直接 spawn 并持有 `tunnel-client run`。按钮旁绿点表示隧道已连通控制平面；**注意 `/readyz` 返回 200 不代表认证成功**，真正的 ready 信号是 `tunnel-client health --require-control-plane-poll` 的 `control_plane_poll.ok=true`。
 
-隧道子进程随 Agentero 退出而停止（`RunEvent::Exit` 里 kill），设置区 **Stop** 与关闭 MCP 开关也会真正结束进程；宿主异常退出（崩溃、强杀）遗留的孤儿会在下次启动时按 `--profile-dir` 清扫。找不到 `tunnel-client` 时按钮禁用，并提示可复制安装命令 `brew install openai/tools/tunnel-client`，不会自动安装。
+隧道子进程随 Agentero 退出而停止（`RunEvent::Exit` 里 kill），设置区 **Stop** 与关闭 MCP 开关也会真正结束进程；宿主异常退出（崩溃、强杀）遗留的孤儿会在下次启动时按 `--profile-dir` 清扫。找不到 `tunnel-client` 时按钮禁用，并提示可复制安装命令 `brew install openai/tools/tunnel-client`，不会自动安装。该状态不是进程级缓存：`mcp_tunnel_status` 在未运行时重新 `resolve_command`，设置页在缺失期间每 2 秒拉一次状态，二进制出现后相位回到 `stopped`，不必重启应用。该状态不是进程级缓存：`mcp_tunnel_status` 在未运行时重新 `resolve_command`，设置页在缺失期间每 2 秒拉一次状态，二进制出现后相位回到 `stopped`，不必重启应用。
 
 Agentero 用独立 `--profile-dir`（`$XDG_CACHE_HOME/agentero/mcp-tunnel`）运行 tunnel-client，避免串到用户已有的 `~/.config/tunnel-client/*.yaml`；API key 只通过子进程 env `CONTROL_PLANE_API_KEY` 注入，不出现在命令行参数或 UI 日志。
 
@@ -63,6 +63,9 @@ Codex / Inspector 也可直接打 loopback URL。stdio 子进程不是这条通�
 | `paper_tag_rm` | 删标签 |
 | `layout_list` | 侧栏版面索引（需 `{paper}/source/layout-index.json`）。`kind[]?`、`minScore?` |
 | `layout_get` | 按 region id 取一条（如 `figure-3`） |
+| `file_list` | 列一层目录。`path?` 为 Vault 相对路径，空则根目录。跳过 `.agentero`、隐藏目录和 LaTeX 编译产物。`limit?` 默认 200，最多 500 |
+| `file_read` | 读一个 UTF-8 文本文件（如 `drafts/main.tex`、`notes/idea.md`）。不限 `papers/` |
+| `file_write` | 写同一个路径。`mode`: `replace`（默认）或 `append`。父目录不存在会在 Vault 内创建。覆盖前需用户确认 |
 
 `paper_notes_write`：
 
@@ -72,16 +75,24 @@ Codex / Inspector 也可直接打 loopback URL。stdio 子进程不是这条通�
 - `append`：追加正文，保留 frontmatter
 - 编辑器有未存改动时走现有 `vault:file-changed` 冲突逻辑
 
-不做：通用读文件、`paper_paths`、delete/trash、mark（请用 CLI）、shell、stdio MCP。
+`file_read` / `file_write`：
+
+- 路径是 Vault 相对路径，禁止 `..`；符号链接解析后必须仍在 Vault 内
+- 只接受 UTF-8 文本，单次最多 2 MiB。拒绝 PDF / 图片 / 压缩包等二进制扩展名，以及内容中的 NUL
+- 与文件树相同，拒绝 `.agentero`、`.` 开头的隐藏项（`.agents` 除外）、`target` 等忽略目录，以及 `.aux` / `.log` 等 LaTeX 编译产物
+- 不写 `NOTES.md`（仍走 `paper_notes_write`，以保留 frontmatter）、`marks/annotations.json`、`source/layout-index.json`、`source/layout.json`、`catalog.sqlite`
+- 原子写。编辑器打开同一文件时走 `vault:file-changed`
+
+不做：删除 / 回收站、`paper_paths`、mark（请用 CLI）、把 PDF 当文本读、shell、stdio MCP。
 
 机器契约与 CLI 共用 `agentero-core::ops`；CLI 侧用 `agentero describe` 自省。
 
 ## 代码
 
-`src-tauri/src/integration/mcp/`：`McpController` + Streamable HTTP（`rmcp`）+ tools/resource。直接调 `features::{catalog, import, vault, pdf::layout_index}`。
+`src-tauri/src/integration/mcp/`：`McpController` + Streamable HTTP（`rmcp`）+ tools/resource。论文工具直接调 `features::{catalog, import, vault, pdf::layout_index}`；`file_*` 只做 Vault 内 UTF-8 文本读写。
 
 ## 安全
 
 - 仅 `127.0.0.1`；默认关
-- `ref` / `parent` 消毒
-- 不暴露 PDF 二进制、不读 XDG API key
+- `ref` / `parent` / `file_*` 的 `path` 消毒，解析后的真实路径必须留在 Vault 内
+- 不暴露 PDF 二进制、不读 `.agentero` 与 XDG API key
