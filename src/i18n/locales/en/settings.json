@@ -142,7 +142,7 @@
 				"error": "Not connected",
 				"stopped": "Stopped",
 				"binaryMissing": "tunnel-client not found",
-				"installHint": "Install it, then reopen Settings:",
+				"installHint": "Install it; this page detects it without a restart:",
 				"copyCommand": "Copy install command",
 				"copied": "Copied",
 				"openTunnels": "Open tunnels",

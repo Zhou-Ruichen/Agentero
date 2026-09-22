@@ -142,7 +142,7 @@
 				"error": "未连接",
 				"stopped": "已停止",
 				"binaryMissing": "未找到 tunnel-client",
-				"installHint": "安装后重新打开设置：",
+				"installHint": "安装后会自动检测到，无需重启：",
 				"copyCommand": "复制安装命令",
 				"copied": "已复制",
 				"openTunnels": "打开隧道列表",

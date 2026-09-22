@@ -77,6 +77,24 @@ struct Inner {
     sweep: Option<tauri::async_runtime::JoinHandle<()>>,
 }
 
+/// Drop a stale "not installed" latch once the binary shows up on PATH.
+/// A running child is left alone.
+fn reconcile_missing_binary(
+    phase: McpTunnelPhase,
+    running: bool,
+    binary_found: bool,
+) -> McpTunnelPhase {
+    if phase == McpTunnelPhase::BinaryMissing && !running && binary_found {
+        McpTunnelPhase::Stopped
+    } else {
+        phase
+    }
+}
+
+fn binary_installed() -> bool {
+    resolve_command(TUNNEL_CLIENT_BIN).is_some()
+}
+
 fn idle_status() -> McpTunnelStatus {
     McpTunnelStatus {
         phase: McpTunnelPhase::Stopped,
@@ -225,10 +243,30 @@ impl McpTunnelController {
     }
 
     pub fn status(&self) -> McpTunnelStatus {
-        self.inner
-            .lock()
-            .map(|g| status_from(&g))
-            .unwrap_or_else(|_| idle_status())
+        let mut healed = false;
+        let status = {
+            let mut g = match self.inner.lock() {
+                Ok(g) => g,
+                Err(_) => return idle_status(),
+            };
+            // `BinaryMissing` used to stick until process restart: Start is
+            // disabled in that phase, so a binary installed afterwards was
+            // never looked up again. Re-probe here; the settings page polls
+            // while the hint is showing.
+            if g.phase == McpTunnelPhase::BinaryMissing && !g.running {
+                let next = reconcile_missing_binary(g.phase, g.running, binary_installed());
+                if next != g.phase {
+                    g.phase = next;
+                    g.last_error = None;
+                    healed = true;
+                }
+            }
+            status_from(&g)
+        };
+        if healed {
+            self.emit_status();
+        }
+        status
     }
 
     pub fn is_running(&self) -> bool {
@@ -719,6 +757,26 @@ fn kill_by_pid(pid: u32) {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    #[test]
+    fn missing_binary_clears_once_installed() {
+        assert_eq!(
+            reconcile_missing_binary(McpTunnelPhase::BinaryMissing, false, true),
+            McpTunnelPhase::Stopped
+        );
+        assert_eq!(
+            reconcile_missing_binary(McpTunnelPhase::BinaryMissing, false, false),
+            McpTunnelPhase::BinaryMissing
+        );
+        assert_eq!(
+            reconcile_missing_binary(McpTunnelPhase::BinaryMissing, true, true),
+            McpTunnelPhase::BinaryMissing
+        );
+        assert_eq!(
+            reconcile_missing_binary(McpTunnelPhase::Ready, false, true),
+            McpTunnelPhase::Ready
+        );
+    }
 
     #[test]
     fn tunnel_id_shape() {

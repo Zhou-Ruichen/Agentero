@@ -877,6 +877,24 @@ function McpTunnelRows({
 		void refresh();
 	}, [refresh]);
 
+	// Start stays disabled while the host still reports BinaryMissing.
+	// Poll so a brew install in another terminal is picked up without
+	// restarting Agentero or reopening this page.
+	useEffect(() => {
+		if (status?.phase !== "binaryMissing") return;
+		const id = window.setInterval(() => {
+			void refresh();
+		}, 2000);
+		const onFocus = () => {
+			void refresh();
+		};
+		window.addEventListener("focus", onFocus);
+		return () => {
+			window.clearInterval(id);
+			window.removeEventListener("focus", onFocus);
+		};
+	}, [status?.phase, refresh]);
+
 	useTauriEvent(events.mcpTunnelStatus, (payload) => {
 		setStatus(payload);
 	});
