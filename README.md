@@ -220,3 +220,9 @@ pnpm dev
 ## 致谢
 
 感谢 [LinuxDo](https://linux.do/) 和 [ModelScope](https://modelscope.cn/) 社区的支持与反馈。
+
+感谢 [AtomGit](https://gitcode.com/poco-ai/Agentero): 在国内托管，帮助中国大陆用户更快访问项目与下载Release。
+
+感谢所有贡献者！
+
+![contributors img Made with contrib.rocks](https://contrib.rocks/image?repo=poco-ai/Agentero)

@@ -10,7 +10,7 @@ Agentero 使用 **BYOA**（Bring Your Own Agent）：Agent 由你安装和登录
 
 - Claude ACP
 - Codex（经 ACP 适配器）
-- OpenCode、Qoder、Grok、Kimi Code、ZCode 等兼容 ACP 的 CLI（ZCode 经 `zcode-acp-server` 适配器，复用桌面版登录）
+- OpenCode、Qoder、Grok、Kimi Code、ZCode、MiniMax Code 等兼容 ACP 的 CLI（ZCode 经 `zcode-acp-server` 适配器，复用桌面版登录）
 - [GenericAgent ACP](genericagent-acp.md)
 - 自定义 `command` / `args` / `env`
 
@@ -48,7 +48,7 @@ Agentero 使用 **BYOA**（Bring Your Own Agent）：Agent 由你安装和登录
 
 1. 打开 **Settings → Agent**，在已安装或已注册的 Agent 行点 **Trash** 按钮。
 2. 确认对话框展示该 Agent 的 logo 与将要执行的清理项：
-   - Agentero 静默安装的 npm 全局包（如 `opencode-ai`、`@anthropic-ai/claude-code` 等）逐个 `npm uninstall -g`；
+   - Agentero 静默安装的 npm 全局包（如 `opencode-ai`、`@anthropic-ai/claude-code`、`@minimax-ai/code` 等）逐个 `npm uninstall -g`；
    - Agentero 管理的目录（Kimi Code 的 `~/.kimi-code`、dsh 旧方案的遗留 `~/.agentero/dsh-acp`）整体删除。
 3. 确认后行内显示卸载进度，完成后注册项一并移除，行回到「未安装」状态。
 
@@ -61,6 +61,8 @@ Agentero 使用 **BYOA**（Bring Your Own Agent）：Agent 由你安装和登录
 ## 使用 Skill
 
 Agentero 的 Skill 是放在 Vault `.agents/skills/<name>/` 下的 prompt 包，含 `SKILL.md` 与可选的 `scripts/`、`references/`、`assets/`。
+
+Claude Code 只读项目内的 `.claude/skills/`：检测到 `claude` CLI 时，Agentero 会自动创建 `.claude/skills → ../.agents/skills` 链接，无需手动复制，新建/删除 Skill 自动同步。若你在 Vault 里已有自己的 `.claude/skills` 目录，则保持原样、不做链接。
 
 ### 安装 Skill
 
@@ -105,7 +107,7 @@ Settings → Agent → 全局权限模式（对所有 Agent 生效，非 per-pro
 ### 手动精读
 
 1. 文件树中找到资源齐全且未读（`is_read === false`）的论文。
-2. 点击论文行上的 **Zap**。
+2. 点击论文行上的 **精读图标**。
 3. 等待左下角后台任务完成。
 4. 打开 `NOTES.md` 检查结果。
 
@@ -129,7 +131,7 @@ Settings → Agent 开启 **自动精读**（`autoPaperReader`，默认关）。
 
 ### 消息发不出去 / 输入法
 
-中文等输入法组字时按 Enter 不应误发送；若仍异常，请更新到最新版本。
+中文等输入法组字时按 Enter 不应误发送；刚打开 Agent 侧边栏后立即语音输入时，首段文本也不应被草稿初始化覆盖。若仍异常，请更新到最新版本。
 
 ## 下一步
 

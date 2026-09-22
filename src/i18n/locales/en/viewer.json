@@ -1,5 +1,4 @@
 {
-	"unavailable": "{{label}} unavailable",
 	"pdf": {
 		"empty": "No paper available.",
 		"loading": "Loading PDF…",
@@ -23,6 +22,10 @@
 		"findNext": "Next match",
 		"findClose": "Close find",
 		"findNoResults": "No results",
+		"exportAnnotatedPdf": "Export annotated PDF",
+		"exportingAnnotatedPdf": "Exporting annotated PDF…",
+		"exportAnnotatedPdfFailed": "Failed to export annotated PDF",
+		"exportDesktopOnly": "Export is only available in the desktop app",
 		"layout": {
 			"unavailable": "Layout analysis is not ready yet.",
 			"preparingModel": "Preparing layout model…",
@@ -187,7 +190,6 @@
 		},
 		"copied": "Copied",
 		"note": "Annotate",
-		"ask": "Ask",
 		"quickChat": "Quick chat",
 		"addToChat": "Add to chat",
 		"chatCommentPlaceholder": "Add an optional comment…",

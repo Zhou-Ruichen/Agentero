@@ -32,8 +32,7 @@ PDFium engine 由窗口共享。默认优先 **worker 引擎**（PDFium WASM 跑
 | 沉浸 | 底部换页栏旁切换；全屏 + 限宽居中 |
 | 位置 | 记忆阅读位置；从 `#page=` / `#section=` 等引用打开时，一次性 pending 页意图优先于恢复上次阅读位置，并短时重试跳转，避免先闪到目标页再被拉回第 1 页；跳转后在目标 bbox 上闪黄色半透明高亮块（~1.6s 淡出）。细条 `#section=` 标题扩成标题下预览块，并 `scrollToPage({ pageCoordinates })` 滚到该 y |
 | 文中链接 | Link annotation 覆盖层：citation / 图表·公式交叉引用 / 章节 GoTo 点击跳页，URI 开系统浏览器；未带 Link annotation 的纯文本 `http(s)` URL 与 `arXiv:<id>` 也会根据现有 PDFium 文字矩形生成外链命中区，并跳过与原生链接重叠的区域。打开论文后（主线程空闲时）在 Worker 里解析命名目标（`lib/pdf/citation-dest-keys.ts`），字节优先复用 `tab.pdfBytes`，按 `pdfPath:size` 缓存。**Citation hover**：hyperref `cite.<key>` 走 `pageIndex:pdfY → key → sidecar.rawKey`；ACS `mk:refN` 因 `/FitR` 整页冲突改走 **Link rect → mk:refN → sidecar id `ref-N`**。同一上标簇内按间距区分逗号与连字符：`14-18` 展开为 14…18 多条列表，`7,9` 保持两条。**Crossref hover**（`Fig. 3` / `Table 1` / `Eq. (2)`）：同理先 dest 坐标，冲突时 **Link rect → mk:tbl1 / mk:fig3**，再配 layout region 裁剪。索引 / layout / sidecar 未就绪或无法消歧时不弹卡片；章节等非 float 内部链接只保留导航。**浮动卡互斥（#430）**：citation 与 crossref 预览互斥；划词拖选进行中、选区操作菜单存在（`selectionMenu`）、全文翻译覆盖层打开或运行（`layoutTranslateActive` / `layoutTranslateRunning`）以及 pin 卡（ask·translate·visual）打开时压制链接预览；链接命中区在主键按下时不触发 hover，避免拖选扫过引用时闪卡；预览卡与 pin 卡共用 sticky hover（指针在卡上不收起，离开后短延迟关闭；link 命中区用 pointer 事件与卡片对齐） |
-| 视觉批注 | 工具栏或 **⌘.** 进入框选，框定/单击 layout 区域后裁剪直接保存为 `marks/<id>.json`，并在页右缘评论列打开就地编辑。框选中、裁剪中、已打开或正在编辑的视觉区域都使用当前 UI 主题色绘制 2px 矩形边缘，并保留轻量 halo 以压住复杂 PDF 内容。评论卡 hover 显示「加入侧边栏对话」图标，点击后将裁剪图送入 Agent composer 草稿。视觉批注的 Agent 会话继续通过右侧 Agent 面板进行；没有用户备注但已有 Agent 会话的视觉批注，点击页边针会在针旁打开浮动对话卡查看 transcript。面板与 mark 共用 `agentSessionStore` 会话（同一 send 管线、同一 `lines`）。多轮会回写同一 `marks/<id>.json` 的 `messages[]` / `answerSnapshot`。活动 PDF 才轮询 marks；切换 Vault 清空 composer 视觉草稿。裁剪最长边 1600 px |
-| 隐私模式 | **窗口失焦**时淡出批注（高亮）、评论卡、翻译覆盖、Agent 对话卡等浮层（`usePdfPrivacy` 经 `onFocusChanged` 监听），页面正文渲染层保留——切换窗口后再截图不会带出标注内容。系统不提供“正在截图”事件，失焦是无需权限的近似代理；纯浏览器 dev 构建恒可见 |
+| 视觉批注 | 工具栏或 **⌘.** 进入框选，框定/单击 layout 区域后裁剪直接保存为 `marks/<id>.json`，并在页右缘评论列打开就地编辑。框选中、裁剪中、已打开或正在编辑的视觉区域都使用当前 UI 主题色绘制 2px 矩形边缘，并保留轻量 halo 以压住复杂 PDF 内容。评论卡 hover 显示「加入侧边栏对话」图标，点击后将裁剪图送入 Agent composer 草稿（同一 mark 在 composer 中至多一枚，重复点击只刷新那一枚）。视觉批注的 Agent 会话继续通过右侧 Agent 面板进行；没有用户备注但已有 Agent 会话的视觉批注，点击页边针会在针旁打开浮动对话卡查看 transcript。面板与 mark 共用 `agentSessionStore` 会话（同一 send 管线、同一 `lines`）。多轮会回写同一 `marks/<id>.json` 的 `messages[]` / `answerSnapshot`。活动 PDF 才轮询 marks；切换 Vault 清空 composer 视觉草稿。裁剪最长边 1600 px |
 
 ## 划词菜单
 
@@ -49,7 +48,7 @@ PDFium engine 由窗口共享。默认优先 **worker 引擎**（PDFium WASM 跑
 | 快速对话 | 页内 Ask 浮层（ephemeral） | 划词工具栏文字按钮 / `⌘K`；打开 PDF Ask 对话卡，不强制打开 Agent 侧栏 |
 | 加入对话 | 发送该轮后写 `marks/<id>.json`（kind `ask`）；远程无 pin 落盘 | 划词工具栏文字按钮 / `⌘L` / `⇧⌘A`（额外聚焦）；点击或快捷键后选区固定为 Agent composer 文本 chip 并打开侧栏；**发送**后在选区旁插入**对话卡片**页边针（与「快速对话」同一 ask 卡 / 非视觉批注）；hover / 打开同样高亮原文，见 [agent.md](agent.md) |
 | 翻译 | `marks/<id>.json`（kind translate） | 浮层结果卡：贴合选区随滚轮重定位；未悬停卡片 / 原文高亮 / 页边针时自动收起（流式中除外）。见 [translate.md](translate.md) |
-| 视觉批注 | `marks/<id>.json`（kind `visual` v2）：区域 + 用户批注 + 可选嵌套 `agent`；裁剪图 `marks/assets/<id>.png`。默认形态为纯批注（与文字「批注备注」同壳）；有 Agent 会话时仍保留页边针以便定位。旧版 `agent-trace` v1 仍可读，Doctor 可一键升 v2 | 框选或单击 layout 区域后裁剪直接落盘，并在页右缘评论列打开就地编辑。评论卡 hover 工具栏含「加入侧边栏对话」图标，点击将裁剪送入 Agent sidebar composer；删除图标也在卡上。没有用户备注但已有 Agent 会话时，点击页边针在针旁打开浮动对话卡，展示已保存 transcript，并可隐藏或删除该视觉批注；其余续聊统一在右侧 Agent 面板进行。视口窄于 640px 时评论列回退为页边针。`marks/annotations.json` 读写会按 annotation id 去重，避免重复导入脏数据 |
+| 视觉批注 | `marks/<id>.json`（kind `visual` v2）：区域 + 用户批注 + 可选嵌套 `agent`；裁剪图 `marks/assets/<id>.png`。默认形态为纯批注（与文字「批注备注」同壳）；有 Agent 会话时仍保留页边针以便定位。旧版 `agent-trace` v1 仍可读，Doctor 可一键升 v2 | 框选或单击 layout 区域后裁剪直接落盘，并在页右缘评论列打开就地编辑。尚未关联 Agent 的裁剪即使备注为空，失焦后仍保留评论卡，避免「加入侧边栏对话」入口消失。评论卡 hover 工具栏含「加入侧边栏对话」图标，点击将裁剪送入 Agent sidebar composer；删除图标也在卡上。「加入」传递的是 mark id，而草稿 id 就是落盘后的 `marks/<id>.json`，因此同一 mark 在 composer 中至多一枚 chip：重复点击刷新该枚（备注 / 区域 / 裁剪图），不会堆出共享同一 id 的重复项（重复项会共用 React key，点掉一个即全部消失）。没有用户备注但已有 Agent 会话时，点击页边针在针旁打开浮动对话卡，展示已保存 transcript，并可隐藏或删除该视觉批注；其余续聊统一在右侧 Agent 面板进行。视口窄于 640px 时评论列回退为页边针。`marks/annotations.json` 读写会按 annotation id 去重，避免重复导入脏数据 |
 
 - 不改 PDF 二进制；不自动写入 `NOTES.md`。
 - 提问 Agent 可与面板默认 Agent 分开配置。
@@ -57,7 +56,7 @@ PDFium engine 由窗口共享。默认优先 **worker 引擎**（PDFium WASM 跑
 - 页边针：用 PDFium `getPageTextRects` 判断是否压字。优先贴选区右侧，有字则试左侧；压字半透明，空白处实心。文字层未加载时保持实心。划词工具栏随视口滚动 / 缩放重定位，始终贴合选区；选区滚出视口时夹在屏幕边缘并半透明。
 - 页右缘控件使用固定 CSS px 尺寸：逐页翻译页签和批注评论列只随 PDF 缩放更新锚点位置，不随页面放大/缩小改变自身宽高。
 - 对话 / 翻译 / 视觉卡片与**同一侧页边针**对齐（左针开左、右针开右），贴合锚点，避免卡片落到选区另一侧。
-- 普通划词只启用文本选区；EmbedPDF 默认 marquee 矩形框选关闭，视觉区域批注只通过工具栏 / **⌘.** 显式进入。
+- 普通划词只启用文本选区；选区显示使用浅透明蓝色，并按 PDFium 的紧致字形边界逐行合并，行间保留空隙，首尾严格停在实际选中文字处，不再使用 EmbedPDF 宽松字框产生的整行溢出。EmbedPDF 默认 marquee 矩形框选关闭，视觉区域批注只通过工具栏 / **⌘.** 显式进入。
 - 普通划词后可通过浮动菜单或系统复制快捷键（macOS **⌘C** / Windows/Linux **Ctrl+C**）复制选中文本；输入框和 Markdown 编辑器复制保持原生行为。
 - 旧版 visual Ask（`kind: ask` + `visualKind`）仍可读、可打开。
 - 一次提交可包含多条视觉批注：prompt 按 `## Annotation N` 分点，图片顺序与 annotation 对齐。
@@ -123,7 +122,6 @@ PDFium engine 由窗口共享。默认优先 **worker 引擎**（PDFium WASM 跑
 | `src/components/viewer/pdf/hooks/use-pdf-find.ts` | `⌘F` 查找 |
 | `src/components/viewer/pdf/hooks/use-pdf-outline.ts` | 书签大纲加载 |
 | `src/components/viewer/pdf/hooks/use-pdf-viewer-handle.ts` | 注册命令式 handle（跨簇，唯一入口） |
-| `src/components/viewer/pdf/hooks/use-pdf-privacy.ts` | 隐私模式：监听窗口 `onFocusChanged`，失焦时返回 hidden（驱动批注/评论/翻译/Agent 卡淡出） |
 | `src/components/viewer/pdf/hooks/use-pdf-pin-anchors.ts` | ask/translate 钉锚点几何投影（`useStableDerived` 指纹稳定：流式期间引用不变，`pinsByPage` 不失效） |
 | `src/components/viewer/pdf/hooks/use-pdf-active-anchors.ts` | 活动卡记录查找（thread/translate/visualTrace）与 ask/translate 页内源锚点投影（仅几何，流式期间保持引用稳定） |
 | `src/components/viewer/pdf/hooks/use-pdf-sidebar-panels.ts` | 左栏 References/Figures 面板开关（与大纲互斥）与评论卡 hover id |
@@ -135,7 +133,7 @@ PDFium engine 由窗口共享。默认优先 **worker 引擎**（PDFium WASM 跑
 | `src/components/viewer/panels/annotations-panel.tsx` | 提问 / visual mark 总览（右栏；文字批注已迁移到 PDF 页右缘评论列） |
 | `src/components/viewer/panels/references-panel.tsx` | 参考文献解析与入库（PDF 左侧浮层面板）；`compact` 模式隐藏 header 与过滤 |
 | `src/lib/workspace/viewer/pdf-viewer-registry.ts` | 按 tab 注册 `PdfViewerHandle`（类型契约也在此定义），供 shell / 命令面板 / workspace actions 调用；lib 层纯注册表，无 JSX |
-| `src/lib/agent/visual-context-store.ts` | Agent composer 视觉批注草稿 |
+| `src/lib/agent/visual-context-store.ts` | Agent composer 视觉批注草稿（按 draft id = mark id 去重，一个 mark 至多一枚） |
 | `src/lib/pdf/agent-trace/` | visual mark 契约（v2 + 读兼容 v1）/ mark 资产 IO / prompt / Open-in-Agent / 会话 pending |
 | `src/lib/pdf-visual/` | pdf↔agent 共享视觉基元的中立缝：`PdfVisualNormalizedRect` 与 trace/line id 生成器（两域都从这里 import，序列化格式不变） |
 | `src/lib/pdf/highlight/` | 高亮 / 批注 |

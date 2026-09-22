@@ -41,7 +41,7 @@ type LibraryStore = {
 	citingScanDraft: CitingScanResult | null;
 	/** Bump to force RecycleBinView reload after Empty Recycle Bin. */
 	trashReloadSignal: number;
-	/** Catalog rows by vault-relative path (for Zap / is_read). */
+	/** Catalog rows by vault-relative path (for read action / is_read). */
 	paperMetaByRelPath: Map<string, PaperMetadata>;
 };
 
@@ -184,7 +184,7 @@ export async function setLibraryPaperTags(
 /** Quiet catalog reload coalesced across external-change bursts (CLI, sync). */
 let libraryRefreshTimer: ReturnType<typeof setTimeout> | null = null;
 
-async function runLibraryRefresh(): Promise<void> {
+export async function runLibraryRefresh(): Promise<void> {
 	libraryRefreshTimer = null;
 	const vaultPath = getVaultPath();
 	if (!vaultPath || !isTauri()) {

@@ -17,6 +17,7 @@ import {
 } from "@/lib/agent/citation-href";
 import { errorText } from "@/lib/core/error";
 import { notifyError, notifyUndo, notifyWarning } from "@/lib/core/notify";
+import { openExternalUrl } from "@/lib/core/open-external";
 import { closeTopOverlay } from "@/lib/core/overlay-stack";
 import { isTauri } from "@/lib/core/tauri";
 import { lifecycle } from "@/lib/lifecycle";
@@ -25,7 +26,10 @@ import {
 	isPaperDirectory,
 	isRemoteArxivPath,
 	isUnderPaperAttachments,
+	isUnderPapers,
 	localFileToArrayBuffer,
+	notesPathForPaper,
+	type PaperMetadata,
 	paperDirFromPath,
 	type RemotePaperItem,
 	remoteArxivPath,
@@ -64,6 +68,7 @@ import {
 	plazaSourceForPath,
 } from "@/lib/plaza";
 import { loadSettings } from "@/lib/settings";
+import { closeCurrentWindow } from "@/lib/shell/close-window";
 import { setLayoutMode } from "@/lib/shell/ui-store";
 import {
 	ensureLocalFsScope,
@@ -154,12 +159,12 @@ import {
 } from "./viewer";
 
 /**
- * When the strip would be empty with a Vault open, insert full Library.
- * Active focus is left to dockview (`onDidActivePanelChange` / sync end).
+ * Library is resident: with a Vault open its tab must always exist in the
+ * strip. Active focus is left to dockview (`onDidActivePanelChange` / sync end).
  */
-function withLibraryIfEmpty(next: DocTab[]): DocTab[] {
-	if (next.length > 0 || !getVaultPath()) return next;
-	return ensureFullLibraryTab([]).tabs;
+function withLibraryPresent(next: DocTab[]): DocTab[] {
+	if (!getVaultPath()) return next;
+	return ensureFullLibraryTab(next).tabs;
 }
 
 /**
@@ -284,6 +289,14 @@ export function openTab(
 			existing.kind === "paper" &&
 			(existing.mode === "pdf" || existing.mode === "html")
 		) {
+			const wantDefaultNotes =
+				!opts?.skipDefaultNotes &&
+				!opts?.placement &&
+				Boolean(existing.notesPath) &&
+				(opts?.forceNotes || loadSettings().autoOpenPaperNotes);
+			if (wantDefaultNotes && !tabHasNotesSplit(getTabs(), existing)) {
+				openTabNotes(existing.id);
+			}
 			activatePaperWithNotes(existing);
 		} else {
 			setActiveTabId(id);
@@ -434,6 +447,9 @@ function openNotesForPaper(
  * closing NOTES leaves the body open.
  */
 export function closeTab(id: string, opts: { remember?: boolean } = {}): void {
+	// Library is resident — never closable (its close affordance is hidden).
+	const target = getTabs().find((t) => t.id === id);
+	if (target && isLibraryVirtualPath(target.path)) return;
 	// Resolve pair before setState so Strict Mode double-invoke is stable.
 	const idsToClose = readingPairCloseIds(getTabs(), id);
 	const active = getActiveTabId();
@@ -453,7 +469,7 @@ export function closeTab(id: string, opts: { remember?: boolean } = {}): void {
 		}
 		if (!removedList.length) return prev;
 		for (const r of removedList) revokeTabMediaSources(r);
-		return withLibraryIfEmpty(next);
+		return withLibraryPresent(next);
 	});
 	removeTabAnnotations(idsToClose);
 }
@@ -508,7 +524,7 @@ export function closePlazaTabs(): void {
 		for (const tab of removed) revokeTabMediaSources(tab);
 		removedIds = removed.map((tab) => tab.id);
 		const tabs = prev.filter((tab) => !removedIds.includes(tab.id));
-		return withLibraryIfEmpty(tabs);
+		return withLibraryPresent(tabs);
 	});
 	if (removedIds.length) removeTabAnnotations(removedIds);
 }
@@ -521,7 +537,7 @@ export function closeTabsUnderPath(path: string): void {
 		if (!removed.length) return prev;
 		for (const t of removed) revokeTabMediaSources(t);
 		removedIds = removed.map((t) => t.id);
-		return withLibraryIfEmpty(tabs);
+		return withLibraryPresent(tabs);
 	});
 	if (removedIds.length) removeTabAnnotations(removedIds);
 }
@@ -756,6 +772,8 @@ export function splitActivePane(): void {
 	const tabs = getTabs();
 	const active = tabs.find((t) => t.id === id);
 	if (!active) return;
+	// Library is the resident singleton — never clone it into a second pane.
+	if (isLibraryVirtualPath(active.path)) return;
 
 	// TeX editor ⌘\ → open/refresh its compiled PDF as the right split.
 	if (isTexPath(active.path)) {
@@ -864,15 +882,7 @@ export function openTranslationTab(
 }
 
 export function closeWindow(): void {
-	if (!isTauri()) return;
-	void (async () => {
-		try {
-			const { getCurrentWindow } = await import("@tauri-apps/api/window");
-			await getCurrentWindow().close();
-		} catch {
-			// window close unavailable outside the desktop shell
-		}
-	})();
+	closeCurrentWindow();
 }
 
 /**
@@ -923,8 +933,11 @@ function activeNotesTarget(): DocTab | null {
 }
 
 /** Set the active paper's NOTES panel without touching other PDF tabs. */
-export function setNotesSplit(open: boolean): void {
-	setLayoutMode("custom");
+export function setNotesSplit(
+	open: boolean,
+	opts: { preserveLayoutMode?: boolean } = {},
+): void {
+	if (!opts.preserveLayoutMode) setLayoutMode("custom");
 	const target = activeNotesTarget();
 	if (!target?.notesPath) return;
 	const notesId = tabIdForPath(target.notesPath);
@@ -1008,8 +1021,15 @@ export function openPaper(paperDir: string): void {
 	setTreeSelectedPath(abs);
 	if (loadSettings().replaceCurrentTabOnOpenPaper) {
 		const activeId = getActiveTabId();
-		if (activeId && !getTabs().some((t) => t.id === tabIdForPath(abs))) {
-			closeTab(activeId, { remember: false });
+		const activeTab = activeId
+			? getTabs().find((t) => t.id === activeId)
+			: null;
+		if (
+			activeTab &&
+			!isLibraryVirtualPath(activeTab.path) &&
+			!getTabs().some((t) => t.id === tabIdForPath(abs))
+		) {
+			closeTab(activeTab.id, { remember: false });
 		}
 	}
 	openTab(abs, { preferMode: "pdf" });
@@ -1187,11 +1207,7 @@ export function openCitation(source: string): void {
 	const trimmed = rewriteCitationHrefToPdf(cleanCitationHref(source));
 	if (!trimmed) return;
 	if (/^https?:\/\//i.test(trimmed)) {
-		void import("@tauri-apps/plugin-opener")
-			.then(({ openUrl }) => openUrl(trimmed))
-			.catch(() => {
-				window.open(trimmed, "_blank", "noopener,noreferrer");
-			});
+		openExternalUrl(trimmed);
 		return;
 	}
 
@@ -1745,12 +1761,12 @@ export function persistTextFile(
 	return attempt;
 }
 
-/** Ensure the strip shows the full Library when it would otherwise be empty. */
+/** Ensure the resident Library tab exists (no-op when already present). */
 export function ensureLibraryTabPresent(): void {
-	if (getTabs().length > 0) return;
-	const ensured = ensureFullLibraryTab([]);
+	const ensured = ensureFullLibraryTab(getTabs());
+	if (!ensured.inserted) return;
 	setTabs(ensured.tabs);
-	setActiveTabId(ensured.activeId);
+	if (!getActiveTabId()) setActiveTabId(ensured.activeId);
 }
 
 const placeholderLoads = new Set<string>();
@@ -1815,6 +1831,38 @@ export function hydratePlaceholderTabs(tabIds: readonly string[]): void {
 			}
 		})();
 	}
+}
+
+/**
+ * After the vault tree finishes loading, some restored paper tabs may have been
+ * misclassified as Library because `paperFolders` was still empty during the
+ * first hydration. Reset those tabs to placeholders and hydrate them again.
+ */
+export function rehydrateMisclassifiedPaperTabs(): void {
+	if (!isTauri() || !getVaultPath()) return;
+	const { paperFolders } = vaultStore.getState();
+	if (!paperFolders.length) return;
+
+	const ids: string[] = [];
+	for (const tab of getTabs()) {
+		if (!tab.loaded || tab.kind !== "library") continue;
+		if (
+			isLibraryVirtualPath(tab.path) ||
+			isTrashVirtualPath(tab.path) ||
+			isPlazaVirtualPath(tab.path)
+		) {
+			continue;
+		}
+		if (!isUnderPapers(tab.path)) continue;
+		if (paperDirFromPath(tab.path, paperFolders)) {
+			ids.push(tab.id);
+		}
+	}
+	if (!ids.length) return;
+
+	for (const id of ids) placeholderLoads.delete(id);
+	for (const id of ids) updateTab(id, { loaded: false });
+	hydratePlaceholderTabs(ids);
 }
 
 /** Library tree node: full library scope, single Library tab. */
@@ -1894,4 +1942,126 @@ export function selectFileNode(node: FileNode): void {
 	}
 	if (node.kind !== "file") return;
 	openPath(node.path);
+}
+
+/**
+ * Synchronize open workspace tabs when a paper has been recognized and renamed.
+ * Reloads the paper's metadata, canonical PDF path, and updated NOTES.md content,
+ * bumping editor reload keys and updating dockview panel titles.
+ */
+export async function syncRenamedPaperTabs(
+	vaultId: string,
+	toAbs: string,
+): Promise<void> {
+	const vaultState = vaultStore.getState();
+	let res: Awaited<ReturnType<typeof loadTabResources>>;
+	try {
+		res = await loadTabResources(
+			toAbs,
+			vaultId,
+			vaultState.tree,
+			vaultState.paperFolders,
+		);
+	} catch {
+		return;
+	}
+
+	const paperTabId = tabIdForPath(toAbs);
+	const notesPath = res.notesPath ?? notesPathForPaper(toAbs);
+	const notesTabId = tabIdForPath(notesPath);
+	const currentTabs = getTabs();
+
+	for (const tab of currentTabs) {
+		if (tab.id === paperTabId || tab.path === toAbs) {
+			updateTab(tab.id, {
+				title: res.title || tab.title,
+				paperMeta: res.paperMeta ?? tab.paperMeta,
+				pdfUrl: res.pdfUrl ?? tab.pdfUrl,
+				pdfBytes: res.pdfBytes ?? tab.pdfBytes,
+				notesPath,
+				notesSeed: res.notesSeed,
+				notesKey: tab.notesKey + 1,
+			});
+		} else if (
+			tab.id === notesTabId ||
+			(tab.notesPath &&
+				normalizeTabPath(tab.notesPath) === normalizeTabPath(notesPath)) ||
+			(tab.path && normalizeTabPath(tab.path) === normalizeTabPath(notesPath))
+		) {
+			updateTab(tab.id, {
+				notesSeed: res.notesSeed,
+				markdownSeed: res.notesSeed,
+				notesKey: tab.notesKey + 1,
+				seedKey: tab.seedKey + 1,
+				paperMeta: res.paperMeta ?? tab.paperMeta,
+				notesPath,
+				path: notesPath,
+			});
+		}
+	}
+
+	if (notesPath) {
+		void applyDiskChange(notesPath);
+	}
+}
+
+/**
+ * Synchronize open workspace tabs when a paper's metadata has been edited or refreshed.
+ * Updates the tab's `title` (for paper tabs) and `paperMeta`, and notifies open NOTES.md
+ * of possible title sync on disk.
+ */
+export function syncUpdatedPaperTabs(
+	vaultPath: string,
+	relPath: string,
+	updated: Partial<PaperMetadata>,
+	fallbackId?: string,
+): void {
+	const normRel = relPath.replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
+	const paperAbs = joinVaultPath(vaultPath, normRel);
+	const notesAbs = joinVaultPath(vaultPath, `${normRel}/NOTES.md`);
+	const normNotesRel = `${normRel}/notes.md`.toLowerCase();
+
+	setTabs((prev) =>
+		prev.map((tab) => {
+			const tabRel = toVaultRelative(vaultPath, tab.path)
+				.replace(/\\/g, "/")
+				.replace(/^\/+|\/+$/g, "");
+			const metaRel = tab.paperMeta?.path
+				?.replace(/\\/g, "/")
+				.replace(/^\/+|\/+$/g, "");
+
+			const isDirectPaperTab =
+				tabRel === normRel || metaRel === normRel || tab.path === paperAbs;
+
+			const isSamePaperId = Boolean(
+				fallbackId && tab.paperMeta?.id && tab.paperMeta.id === fallbackId,
+			);
+
+			const isNotesTab =
+				Boolean(tab.notesPath && tab.notesPath === notesAbs) ||
+				Boolean(tabRel && tabRel.toLowerCase() === normNotesRel);
+
+			if (!isDirectPaperTab && !isSamePaperId && !isNotesTab) {
+				return tab;
+			}
+
+			const nextMeta: PaperMetadata = {
+				...(tab.paperMeta ?? ({} as PaperMetadata)),
+				...updated,
+			};
+
+			const nextTitle =
+				tab.kind === "paper"
+					? nextMeta.title?.trim() || basenameOf(tab.path)
+					: tab.title;
+
+			return {
+				...tab,
+				title: nextTitle,
+				paperMeta: nextMeta,
+			};
+		}),
+	);
+
+	void applyDiskChange(notesAbs);
 }

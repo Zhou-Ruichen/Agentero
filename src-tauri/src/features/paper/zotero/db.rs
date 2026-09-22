@@ -246,18 +246,40 @@ pub async fn migrate_zotero(
         prefer_collection: args.prefer_collection,
     };
 
-    // Materialize the whole Zotero collection tree up front — including empty
-    // collections and ones whose items were deduped against the catalog — so
-    // the vault structure matches the library even when no paper lands in some
-    // folders (previously folders only existed as a side effect of placement,
-    // which made sub-collections "disappear").
+    // Materialize the collection tree up front so the vault structure matches
+    // the library even when no paper lands in some folders (previously folders
+    // only existed as a side effect of placement, which made sub-collections
+    // "disappear"). Scoped to the selection: importing one Zotero folder must
+    // not materialize the rest of the library's tree as empty folders.
     if flags.preserve_collections {
-        for c in &collections {
-            if c.path.is_empty() {
-                continue; // pseudo "unfiled" bucket
+        let prefer_path = flags.prefer_collection.and_then(|pid| {
+            collections
+                .iter()
+                .find(|c| c.id == pid)
+                .map(|c| c.path.clone())
+                .filter(|p| !p.is_empty())
+        });
+        if let Some(pref) = &prefer_path {
+            // A folder was selected: keep only that folder and its descendants,
+            // including empty ones, so the imported subtree is complete.
+            let prefix = format!("{pref}/");
+            for c in &collections {
+                if c.path == *pref || c.path.starts_with(&prefix) {
+                    let _ = fs::create_dir_all(vault.join(&parent_rel).join(&c.path));
+                }
             }
-            let _ = fs::create_dir_all(vault.join(&parent_rel).join(&c.path));
+        } else if include_items.is_none() {
+            // Whole-library import: the full tree, including empty collections
+            // and ones whose items were deduped against the catalog.
+            for c in &collections {
+                if c.path.is_empty() {
+                    continue; // pseudo "unfiled" bucket
+                }
+                let _ = fs::create_dir_all(vault.join(&parent_rel).join(&c.path));
+            }
         }
+        // Item-scoped import without a folder selection: no up-front tree;
+        // folders appear where papers actually land.
     }
 
     // Apply per-paper / collection selection up front so the progress total
@@ -630,7 +652,7 @@ impl Dedup {
             if let Some(x) = r.doi.as_deref().filter(|s| !s.is_empty()) {
                 d.doi.insert(x.to_lowercase(), r.path.clone());
             }
-            let t = normalize_title(&r.title);
+            let t = title_match_key(&r.title);
             if !t.is_empty() {
                 d.title.insert(t, r.path.clone());
             }
@@ -654,7 +676,7 @@ impl Dedup {
                 return Some(p.clone());
             }
         }
-        let t = normalize_title(&meta.title);
+        let t = title_match_key(&meta.title);
         if !t.is_empty() {
             if let Some(p) = self.title.get(&t) {
                 return Some(p.clone());
@@ -670,14 +692,19 @@ impl Dedup {
         if let Some(x) = meta.doi.as_deref().filter(|s| !s.is_empty()) {
             self.doi.insert(x.to_lowercase(), path.to_string());
         }
-        let t = normalize_title(&meta.title);
+        let t = title_match_key(&meta.title);
         if !t.is_empty() {
             self.title.insert(t, path.to_string());
         }
     }
 }
 
-pub(crate) fn normalize_title(title: &str) -> String {
+/// Comparison key for Zotero → catalog *identity* matching: whitespace folded
+/// to single spaces and lowercased, punctuation kept verbatim. Differs from
+/// `scholar_api::scoring::title_similarity_key` (drops punctuation, Unicode
+/// alphanumerics) and from `analyze::refs::latex::title_compact_key` (ASCII
+/// only, all separators removed).
+pub(crate) fn title_match_key(title: &str) -> String {
     title
         .split_whitespace()
         .collect::<Vec<_>>()
@@ -1503,6 +1530,59 @@ mod tests {
         assert_eq!(out.paths[0], "papers/NLP/Transformers/10_5555_abc");
         // Empty collection still materializes so the tree matches Zotero.
         assert!(vault.join("papers/Empty Sibling").is_dir());
+
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[tokio::test]
+    async fn migrate_folder_selection_materializes_only_its_subtree() {
+        let base = std::env::temp_dir().join(format!("motif-zmig-sub-{}", now_nanos()));
+        let vault = base.join("vault");
+        let zdir = base.join("zotero");
+        fs::create_dir_all(&vault).unwrap();
+        fs::create_dir_all(&zdir).unwrap();
+        {
+            let conn = Connection::open(zdir.join("zotero.sqlite")).unwrap();
+            conn.execute_batch(SEED_SQL).unwrap();
+            // Out-of-scope collections: an empty root sibling and a sibling
+            // subtree with an empty nested folder.
+            conn.execute_batch(
+                "INSERT INTO collections VALUES (3,'Empty Sibling',NULL);
+                 INSERT INTO collections VALUES (4,'Other',NULL),(5,'Other Sub',4);",
+            )
+            .unwrap();
+        }
+
+        // Importing the "NLP" folder (id 1): papers of its subtree land, the
+        // folder's own subtree is materialized, nothing outside it is created.
+        let out = migrate_zotero(
+            ZoteroMigrateArgs {
+                vault_path: vault.to_string_lossy().to_string(),
+                zotero_dir: zdir.to_string_lossy().to_string(),
+                parent_dir: Some("papers".into()),
+                copy_pdfs: false,
+                preserve_collections: true,
+                include_collections: None,
+                include_items: Some(vec![10]),
+                prefer_collection: Some(1),
+                migrate_notes: false,
+                migrate_annotations: false,
+            },
+            |_c, _t, _p| {},
+            None,
+            NoteShellMode::Standard,
+        )
+        .await
+        .unwrap();
+        assert_eq!(out.imported, 1);
+        assert_eq!(out.paths[0], "papers/NLP/Transformers/10_5555_abc");
+        // Selected folder and its (empty) descendants are materialized.
+        assert!(vault.join("papers/NLP").is_dir());
+        assert!(vault.join("papers/NLP/Transformers").is_dir());
+        // Nothing outside the selected folder appears as an empty folder.
+        assert!(!vault.join("papers/Empty Sibling").exists());
+        assert!(!vault.join("papers/Other").exists());
+        assert!(!vault.join("papers/Other/Other Sub").exists());
 
         let _ = fs::remove_dir_all(&base);
     }

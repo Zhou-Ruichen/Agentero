@@ -8,8 +8,9 @@
 use crate::features::agent::registry::discovery::path_entries;
 use crate::features::agent::registry::discovery::resolve_command;
 use crate::features::agent::registry::templates::{
-    kimi_launcher_dir, template_info, CLAUDE_ACP_INSTALL_COMMAND, DSH_INSTALL_COMMAND,
-    PI_ACP_INSTALL_COMMAND, PI_HOST_INSTALL_COMMAND, ZCODE_ACP_INSTALL_COMMAND,
+    kimi_launcher_dir, template_info, CLAUDE_ACP_INSTALL_COMMAND, CODEX_ACP_INSTALL_COMMAND,
+    DSH_INSTALL_COMMAND, MINIMAX_CODE_INSTALL_COMMAND, PI_ACP_INSTALL_COMMAND,
+    PI_HOST_INSTALL_COMMAND, ZCODE_ACP_INSTALL_COMMAND,
 };
 use serde::Serialize;
 use std::collections::HashSet;
@@ -85,6 +86,7 @@ pub const LIFECYCLE_TEMPLATES: &[&str] = &[
     "dsh",
     "kimi-code",
     "zcode",
+    "minimax-code",
 ];
 
 /// Launcher directory of the retired dsh ACP-demo scheme (managed `npm i` of
@@ -256,6 +258,13 @@ pub fn uninstall_info(template_id: &str) -> Option<UninstallInfo> {
     let zcode_acp = "npm uninstall -g zcode-acp-server".to_string();
     #[cfg(not(target_os = "windows"))]
     let zcode_acp = "npm uninstall -g zcode-acp-server --prefix \"$HOME/.local\"".to_string();
+    // Mirrors CODEX_ACP_INSTALL_COMMAND: uninstall must target the same prefix
+    // the install used, or a user-prefix adapter leaves an orphan on Unix.
+    let codex_acp = if cfg!(windows) {
+        "npm uninstall -g @agentclientprotocol/codex-acp".to_string()
+    } else {
+        "npm uninstall -g @agentclientprotocol/codex-acp --prefix \"$HOME/.local\"".to_string()
+    };
     #[cfg(target_os = "windows")]
     let dsh_host = "npm uninstall -g @deepseek-ai/dsh".to_string();
     #[cfg(not(target_os = "windows"))]
@@ -271,7 +280,7 @@ pub fn uninstall_info(template_id: &str) -> Option<UninstallInfo> {
         ),
         "codex-acp" => (
             vec!["npm uninstall -g @openai/codex".to_string()],
-            vec!["npm uninstall -g @agentclientprotocol/codex-acp".to_string()],
+            vec![codex_acp],
         ),
         "pi" => (
             vec!["npm uninstall -g @earendil-works/pi-coding-agent".to_string()],
@@ -286,6 +295,10 @@ pub fn uninstall_info(template_id: &str) -> Option<UninstallInfo> {
         "dsh" => (vec![dsh_host], Vec::new()),
         "kimi-code" => (
             vec!["npm uninstall -g @moonshot-ai/kimi-code".to_string()],
+            Vec::new(),
+        ),
+        "minimax-code" => (
+            vec!["npm uninstall -g @minimax-ai/code".to_string()],
             Vec::new(),
         ),
         // Single-package adapter: the ACP bridge is the only npm artifact
@@ -420,7 +433,13 @@ pub fn run_template_lifecycle(
         .as_deref()
         .unwrap_or(info.command.as_str());
     let host_present = resolve_command(detect).is_some();
-    let acp_present = resolve_command(&info.command).is_some();
+    let acp_path_present = resolve_command(&info.command).is_some();
+    // Bundled adapter tier keeps the ACP layer ready without an npm install;
+    // it only counts when nothing is PATH-installed (PATH always wins) and it
+    // can actually spawn. While active, install/update refresh the host only —
+    // the bundled adapter moves with app releases.
+    let bundled_tier_active = !acp_path_present && super::bundled::bundled_spawnable(template_id);
+    let acp_present = acp_path_present || bundled_tier_active;
     // Same binary for host and ACP (opencode, openclaw, hermes, grok via npx).
     let needs_separate_adapter = info
         .detect_command
@@ -432,11 +451,14 @@ pub fn run_template_lifecycle(
             if needs_separate_adapter {
                 if host_present && !acp_present {
                     adapter_install_command(template_id)?
-                } else if !host_present {
+                } else if !host_present && !bundled_tier_active {
                     chain_host_and_adapter(
                         host_install_command(template_id)?,
                         adapter_install_command(template_id)?,
                     )
+                } else if !host_present {
+                    // Bundled adapter already covers the ACP layer.
+                    host_install_command(template_id)?
                 } else {
                     // Host + adapter both present — treat install as update.
                     update_command(
@@ -444,6 +466,7 @@ pub fn run_template_lifecycle(
                         host_present,
                         acp_present,
                         needs_separate_adapter,
+                        bundled_tier_active,
                     )?
                 }
             } else if host_present {
@@ -457,6 +480,7 @@ pub fn run_template_lifecycle(
             host_present,
             acp_present,
             needs_separate_adapter,
+            bundled_tier_active,
         )?,
         // Diverted to `run_template_uninstall` above.
         ToolLifecycleAction::Uninstall => {
@@ -495,6 +519,7 @@ fn update_command(
     host_present: bool,
     acp_present: bool,
     needs_separate_adapter: bool,
+    bundled_tier_active: bool,
 ) -> Result<String, String> {
     if needs_separate_adapter {
         let mut parts = Vec::new();
@@ -504,7 +529,10 @@ fn update_command(
             parts.push(host_install_command(template_id)?);
         }
         let host_update_has_adapter = host_present && host_update_includes_adapter(template_id);
-        if !host_update_has_adapter && (!acp_present || host_present) {
+        // While the bundled tier is the active adapter, update refreshes the
+        // host only; a PATH-installed adapter (bundled_tier_active=false)
+        // restores the chained refresh below.
+        if !bundled_tier_active && !host_update_has_adapter && (!acp_present || host_present) {
             // Always refresh adapter on update when host path exists; install if missing.
             parts.push(adapter_install_command(template_id)?);
         }
@@ -519,7 +547,7 @@ fn update_command(
 fn adapter_install_command(template_id: &str) -> Result<String, String> {
     match template_id {
         "claude-acp" => Ok(CLAUDE_ACP_INSTALL_COMMAND.to_string()),
-        "codex-acp" => Ok("npm i -g @agentclientprotocol/codex-acp@latest".to_string()),
+        "codex-acp" => Ok(CODEX_ACP_INSTALL_COMMAND.to_string()),
         "pi" => Ok(PI_ACP_INSTALL_COMMAND.to_string()),
         _ => Err(format!("no ACP adapter install for {template_id}")),
     }
@@ -540,6 +568,7 @@ fn host_install_command(template_id: &str) -> Result<String, String> {
                 &kimi_install_windows_command(),
                 KIMI_NPM_INSTALL_COMMAND,
             )),
+            "minimax-code" => Ok(MINIMAX_CODE_INSTALL_COMMAND.to_string()),
             "grok-build" => Ok(chain_or(
                 &grok_install_windows_command(),
                 "npm i -g @xai-official/grok@latest",
@@ -565,6 +594,7 @@ fn host_install_command(template_id: &str) -> Result<String, String> {
             "pi" => Ok(PI_HOST_INSTALL_COMMAND.to_string()),
             "dsh" => Ok(DSH_INSTALL_COMMAND.to_string()),
             "kimi-code" => Ok(chain_or(KIMI_INSTALL_UNIX, KIMI_NPM_INSTALL_COMMAND)),
+            "minimax-code" => Ok(MINIMAX_CODE_INSTALL_COMMAND.to_string()),
             "grok-build" => Ok(chain_or(
                 GROK_INSTALL_UNIX,
                 "npm i -g @xai-official/grok@latest",
@@ -618,6 +648,7 @@ fn host_update_command(template_id: &str) -> Result<String, String> {
         // selection), so silent update re-runs the idempotent official installer
         // (latest version) with the npm install as fallback.
         "kimi-code" => Ok(host_install_command(template_id)?),
+        "minimax-code" => Ok(MINIMAX_CODE_INSTALL_COMMAND.to_string()),
         "hermes" => {
             #[cfg(target_os = "windows")]
             {
@@ -729,7 +760,7 @@ npm i -g @anthropic-ai/claude-code@latest
 {claude_acp}
 # Codex + ACP adapter
 npm i -g @openai/codex@latest
-npm i -g @agentclientprotocol/codex-acp@latest
+{codex_acp}
 # OpenCode
 npm i -g opencode-ai@latest
 # OpenClaw
@@ -745,14 +776,18 @@ npm i -g openclaw@latest
 # Kimi Code
 {kimi}
 # (or) npm i -g @moonshot-ai/kimi-code@latest
+# MiniMax Code
+{minimax}
 # Dsh (DeepSeek Harness, ACP via dsh --profile acp)
 {dsh}"#,
             claude_acp = CLAUDE_ACP_INSTALL_COMMAND,
+            codex_acp = CODEX_ACP_INSTALL_COMMAND,
             pi_host = PI_HOST_INSTALL_COMMAND,
             pi_acp = PI_ACP_INSTALL_COMMAND,
             hermes = hermes_install_windows_command(),
             grok = grok_install_windows_command(),
             kimi = kimi_install_windows_command(),
+            minimax = MINIMAX_CODE_INSTALL_COMMAND,
             dsh = DSH_INSTALL_COMMAND,
         )
     }
@@ -764,7 +799,7 @@ npm i -g openclaw@latest
 {claude_acp}
 # Codex + ACP adapter
 npm i -g @openai/codex@latest
-npm i -g @agentclientprotocol/codex-acp@latest
+{codex_acp}
 # OpenCode
 {opencode} || npm i -g opencode-ai@latest
 # OpenClaw
@@ -778,16 +813,20 @@ npm i -g openclaw@latest
 {grok} || npm i -g @xai-official/grok@latest
 # Kimi Code
 {kimi} || npm i -g @moonshot-ai/kimi-code@latest
+# MiniMax Code
+{minimax}
 # Dsh (DeepSeek Harness, ACP via dsh --profile acp)
 {dsh}"#,
             claude_host = CLAUDE_INSTALL_UNIX,
             claude_acp = CLAUDE_ACP_INSTALL_COMMAND,
+            codex_acp = CODEX_ACP_INSTALL_COMMAND,
             opencode = OPENCODE_INSTALL_UNIX,
             pi_host = PI_HOST_INSTALL_COMMAND,
             pi_acp = PI_ACP_INSTALL_COMMAND,
             hermes = HERMES_INSTALL_UNIX,
             grok = GROK_INSTALL_UNIX,
             kimi = KIMI_INSTALL_UNIX,
+            minimax = MINIMAX_CODE_INSTALL_COMMAND,
             dsh = DSH_INSTALL_COMMAND,
         )
     }
@@ -878,10 +917,34 @@ fn apply_npm_cache_env(cmd: &mut Command, default_cache: Option<&std::path::Path
 /// None when `default_cache` is usable; Some(managed dir) when managed
 /// installs must bypass an unwritable system cache.
 fn npm_cache_override(default_cache: Option<&std::path::Path>) -> Option<std::path::PathBuf> {
-    if default_cache.is_some_and(dir_is_writable) {
+    if default_cache.is_some_and(npm_cache_writable) {
         return None;
     }
     Some(managed_npm_cache_dir())
+}
+
+/// The cache root may still be user-writable while a root-owned `_cacache`
+/// entry rejects writes: macOS `sudo` keeps `$HOME`, so one `sudo npm` run
+/// creates `_cacache/tmp`, `index-v5`, `content-v2` owned by root inside the
+/// user's own `~/.npm`. A root-only probe passes, no override happens, and npm
+/// then fails mid-install with the intermittent
+/// `EPERM: operation not permitted` users see "sometimes". Check the subtree
+/// npm actually writes into, not just the root.
+fn npm_cache_writable(dir: &std::path::Path) -> bool {
+    if !dir_is_writable(dir) {
+        return false;
+    }
+    let cacache = dir.join("_cacache");
+    if !cacache.is_dir() {
+        return true;
+    }
+    dir_is_writable(&cacache)
+        && std::fs::read_dir(&cacache).is_ok_and(|entries| {
+            entries
+                .flatten()
+                .filter(|entry| entry.path().is_dir())
+                .all(|entry| dir_is_writable(&entry.path()))
+        })
 }
 
 /// npm's effective cache for this user: an explicit `npm_config_cache` wins,
@@ -1204,6 +1267,28 @@ mod tests {
     }
 
     #[test]
+    fn bundled_tier_update_refreshes_host_only() {
+        // Bundled tier active (no PATH adapter): update refreshes the host and
+        // must not npm-install an adapter over the bundled one.
+        let update =
+            update_command("claude-acp", true, true, true, true).expect("claude-acp update");
+        assert!(
+            !update.contains("claude-agent-acp"),
+            "bundled tier active: adapter refresh not expected: {update}"
+        );
+        assert!(
+            update.contains("claude update") || update.contains("@anthropic-ai/claude-code"),
+            "host update expected: {update}"
+        );
+        // PATH adapter installed (bundled inactive): the adapter refresh returns.
+        let chained = update_command("claude-acp", true, true, true, false).unwrap();
+        assert!(
+            chained.contains("claude-agent-acp"),
+            "PATH tier active: adapter refresh expected: {chained}"
+        );
+    }
+
+    #[test]
     fn adapter_commands_for_acp_templates() {
         assert!(adapter_install_command("claude-acp")
             .unwrap()
@@ -1212,6 +1297,28 @@ mod tests {
             .unwrap()
             .contains("codex-acp"));
         assert!(adapter_install_command("pi").unwrap().contains("pi-acp"));
+    }
+
+    /// Codex was the last adapter installed into the global npm prefix on Unix,
+    /// where a root-owned prefix makes `npm i -g` fail with EPERM. Install and
+    /// uninstall must both target the user prefix there (Windows keeps the
+    /// plain global install, matching claude/pi/zcode/dsh).
+    #[test]
+    fn codex_acp_commands_match_the_other_adapters() {
+        let install = adapter_install_command("codex-acp").unwrap();
+        let codex = uninstall_info("codex-acp").unwrap();
+        let uninstall = codex.acp.npm_commands[0].as_str();
+        let claude = adapter_install_command("claude-acp").unwrap();
+        assert_eq!(
+            install.contains("--prefix"),
+            claude.contains("--prefix"),
+            "codex-acp must follow the claude-acp prefix pattern: {install}"
+        );
+        assert_eq!(
+            install.contains("--prefix"),
+            uninstall.contains("--prefix"),
+            "codex-acp uninstall must mirror the install prefix: {uninstall}"
+        );
     }
 
     #[test]
@@ -1227,7 +1334,7 @@ mod tests {
             "pi host update must also refresh pi-acp"
         );
 
-        let full_update = update_command("pi", true, true, true).expect("pi full update");
+        let full_update = update_command("pi", true, true, true, false).expect("pi full update");
         assert_eq!(
             full_update.matches("pi-acp").count(),
             1,
@@ -1235,7 +1342,7 @@ mod tests {
         );
 
         let install_when_missing =
-            update_command("pi", false, false, true).expect("pi install when missing");
+            update_command("pi", false, false, true, false).expect("pi install when missing");
         assert_eq!(
             install_when_missing.matches("pi-acp").count(),
             1,
@@ -1310,6 +1417,22 @@ mod tests {
         assert!(!cmd.contains("curl"));
         // Update re-runs the idempotent npm install (no official self-update).
         let update = host_update_command("dsh").expect("dsh update");
+        assert_eq!(update, cmd);
+    }
+
+    #[test]
+    fn minimax_install_allows_native_sqlite_dependencies() {
+        let cmd = host_install_command("minimax-code").expect("MiniMax Code install");
+        assert!(cmd.contains("@minimax-ai/code@latest"), "{cmd}");
+        assert!(cmd.contains("--ignore-scripts=false"), "{cmd}");
+        assert!(cmd.contains("--include=optional"), "{cmd}");
+        assert!(
+            cmd.contains("--allow-scripts=@minimax-ai/code,better-sqlite3"),
+            "{cmd}"
+        );
+        assert!(cmd.contains("--foreground-scripts"), "{cmd}");
+
+        let update = host_update_command("minimax-code").expect("MiniMax Code update");
         assert_eq!(update, cmd);
     }
 
@@ -1540,6 +1663,30 @@ mod tests {
             "unwritable default must be replaced: {stdout}"
         );
         let _ = fs::remove_file(&file);
+    }
+
+    /// A writable cache root with an unwritable `_cacache` child (what one
+    /// `sudo npm` run leaves behind on macOS, where sudo keeps `$HOME`): npm
+    /// fails mid-install even though the root probe passes, so the override
+    /// must look one level deeper. Unix-only: the simulation chmods a dir.
+    #[cfg(unix)]
+    #[test]
+    fn npm_cache_override_catches_root_owned_cacache_entries() {
+        use std::os::unix::fs::PermissionsExt;
+        let cache = std::env::temp_dir().join("agentero-npm-cache-test-poisoned");
+        let _ = fs::remove_dir_all(&cache);
+        let cacache = cache.join("_cacache");
+        let tmp = cacache.join("tmp");
+        fs::create_dir_all(&tmp).expect("create probe cache");
+        assert!(
+            npm_cache_override(Some(&cache)).is_none(),
+            "a healthy cache must not be overridden"
+        );
+        fs::set_permissions(&tmp, fs::Permissions::from_mode(0o000)).expect("chmod tmp to 000");
+        let managed = npm_cache_override(Some(&cache)).expect("poisoned cache must be overridden");
+        assert!(managed.ends_with("npm-cache"), "{managed:?}");
+        fs::set_permissions(&tmp, fs::Permissions::from_mode(0o755)).expect("restore tmp");
+        let _ = fs::remove_dir_all(&cache);
     }
 }
 

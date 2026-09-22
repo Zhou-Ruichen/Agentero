@@ -14,11 +14,13 @@ import { notifyError, notifySuccess, notifyWarning } from "@/lib/core/notify";
 import { enqueueTask, enqueueTaskSettled } from "@/lib/core/tasks";
 import {
 	detectPaperDirectory,
+	isPublicationDateInput,
 	notesPathForPaper,
 	type PaperMetadata,
 	type PaperTag,
 	paperCatalogPath,
 	paperDirFromPath,
+	publicationDateText,
 	resolvePapersParentDir,
 } from "@/lib/paper";
 import {
@@ -47,7 +49,7 @@ import { joinVaultPath, readVaultFile } from "@/lib/vault";
 import { isRemoteVaultHandle } from "@/lib/vault/remote/remote-vault";
 import { getVaultPath, refreshTree, vaultStore } from "@/lib/vault/store";
 import { toVaultRelative } from "@/lib/wiki";
-import { openPaper } from "@/lib/workspace/actions";
+import { openPaper, syncUpdatedPaperTabs } from "@/lib/workspace/actions";
 import {
 	refreshTabNotes,
 	setTabs,
@@ -250,7 +252,7 @@ export async function downloadLibraryPaper(
 }
 
 /**
- * paper-reader workflow: Zap on complete + unread papers.
+ * paper-reader workflow: manual read on complete + unread papers.
  * Progress surfaces in the bottom-left background tasks panel.
  */
 export async function readPaper(node: FileNode): Promise<void> {
@@ -428,24 +430,7 @@ export async function paperMetaChange(
 				return key === path ? { ...p, ...updated } : p;
 			}),
 		);
-		setTabs((prev) =>
-			prev.map((tab) => {
-				if (!tab.paperMeta) return tab;
-				const key = tab.paperMeta.path
-					.replace(/\\/g, "/")
-					.replace(/^\/+|\/+$/g, "");
-				const samePath = key === path;
-				const sameOpenPaper = !key && tab.paperMeta.id === paperMeta.id;
-				if (!samePath && !sameOpenPaper) return tab;
-				return {
-					...tab,
-					paperMeta: {
-						...tab.paperMeta,
-						...updated,
-					},
-				};
-			}),
-		);
+		syncUpdatedPaperTabs(vaultPath, path, updated, paperMeta.id);
 		return { ...paperMeta, ...updated };
 	} catch (e) {
 		notifyError(errorText(e));
@@ -496,7 +481,9 @@ export function resolvedMetaPatch(meta: PaperMetadata): PaperMetaPatch {
 	const patch: PaperMetaPatch = {};
 	if (meta.title?.trim()) patch.title = meta.title.trim();
 	if (meta.authors?.length) patch.authors = meta.authors;
-	if (meta.year != null) patch.year = String(meta.year);
+	// Sources occasionally return prose ("Spring 2017"); the Host would reject it.
+	const date = publicationDateText(meta);
+	if (date && isPublicationDateInput(date)) patch.date = date;
 	if (meta.doi?.trim()) patch.doi = meta.doi.trim();
 	if (meta.arxiv_id?.trim()) patch.arxivId = meta.arxiv_id.trim();
 	if (meta.publication?.trim()) patch.publication = meta.publication.trim();
@@ -530,7 +517,8 @@ export async function refreshPaperMetadata(
 		const patch = resolvedMetaPatch(meta);
 
 		if (Object.keys(patch).length > 0) {
-			await updatePaperMeta(vaultPath, paper.path, patch);
+			const updated = await updatePaperMeta(vaultPath, paper.path, patch);
+			syncUpdatedPaperTabs(vaultPath, paper.path, updated, paper.id);
 			scheduleLibraryRefresh();
 			notifySuccess(i18n.t("sidebar:papersLibrary.refreshMetadataDone"));
 		} else {

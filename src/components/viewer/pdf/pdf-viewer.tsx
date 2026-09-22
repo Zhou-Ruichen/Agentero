@@ -79,7 +79,6 @@ import { usePdfOutline } from "@/components/viewer/pdf/hooks/use-pdf-outline";
 import { usePdfPageText } from "@/components/viewer/pdf/hooks/use-pdf-page-text";
 import { usePdfPaperTone } from "@/components/viewer/pdf/hooks/use-pdf-paper-tone";
 import { usePdfPinAnchors } from "@/components/viewer/pdf/hooks/use-pdf-pin-anchors";
-import { usePdfPrivacy } from "@/components/viewer/pdf/hooks/use-pdf-privacy";
 import { usePdfRegionFraming } from "@/components/viewer/pdf/hooks/use-pdf-region-framing";
 import { usePdfScrollSync } from "@/components/viewer/pdf/hooks/use-pdf-scroll-sync";
 import { usePdfSelectionActions } from "@/components/viewer/pdf/hooks/use-pdf-selection-actions";
@@ -133,7 +132,10 @@ import {
 	type PdfLayoutRegion,
 	setFocusedLayoutRegion,
 } from "@/lib/pdf/layout";
-import type { ActiveSelectionCard } from "@/lib/pdf/selection";
+import {
+	type ActiveSelectionCard,
+	selectionAnchorKey,
+} from "@/lib/pdf/selection";
 import { PDF_ZOOM_MAX, PDF_ZOOM_MIN } from "@/lib/pdf/zoom";
 
 export type {
@@ -369,7 +371,6 @@ function PdfViewerInner({
 }: PdfViewerInnerProps) {
 	const { t } = useTranslation("viewer");
 	const [importBusy, setImportBusy] = useState(false);
-	const privacyHidden = usePdfPrivacy();
 	// Parent often passes inline lambdas; keep latest in refs so data effects
 	// do not re-fire every parent render (was Maximum update depth exceeded).
 	const onAsksChangeRef = useRef(onAsksChange);
@@ -457,6 +458,24 @@ function PdfViewerInner({
 		return paperMetaByRelPath.get(key);
 	}, [paperMetaProp, paperRelPath, paperMetaByRelPath]);
 	const paperTitle = paperMeta?.title;
+	/** Default file name for the "export annotated PDF" save dialog. */
+	const defaultExportName = useMemo(() => {
+		const raw =
+			paperTitle?.trim() ||
+			paperRelPath
+				?.replace(/\\/g, "/")
+				.split("/")
+				.pop()
+				?.replace(/\.pdf$/i, "") ||
+			paperAbsPath
+				?.replace(/\\/g, "/")
+				.split("/")
+				.pop()
+				?.replace(/\.pdf$/i, "") ||
+			"annotated";
+		const safe = raw.replace(/[\\/:*?"<>|]+/g, "_").trim();
+		return safe.slice(0, 100) || "annotated";
+	}, [paperTitle, paperRelPath, paperAbsPath]);
 	/** Resolvable wiki target for comment-rail copy-link/copy-embed. */
 	const commentWikiTarget = useMemo(() => {
 		if (!paperRelPath) return null;
@@ -565,12 +584,6 @@ function PdfViewerInner({
 		}
 		return next;
 	}, [pageTextLinkMap, citationLinks]);
-	/**
-	 * Mirror of the translate cluster's `translateStreaming`. Created here (not in
-	 * {@link usePdfSelectionTranslate}) because `usePdfCards` is declared first and
-	 * needs the same ref object to keep a streaming translate card alive.
-	 */
-	const translateStreamingRef = useRef(false);
 
 	const hostRef = useRef<HTMLDivElement>(null);
 
@@ -583,7 +596,6 @@ function PdfViewerInner({
 		isSelecting,
 		closeSelectionMenu,
 		rePlaceSelectionMenu,
-		copiedLabelPos,
 	} = usePdfTextSelection({
 		selectionCap,
 		docCap,
@@ -646,14 +658,12 @@ function PdfViewerInner({
 		rePlaceActiveCardOnScroll,
 		markCardHoverEnter,
 		scheduleHoverHide,
-		cardHoverSurfaceRef,
 	} = usePdfCards({
 		hostRef,
 		pageTextMapRef,
 		threadsRef,
 		translatesRef,
 		visualTracesRef,
-		translateStreamingRef,
 		onCardOpen: resetChromeForOpenedCard,
 		onCardClose: resetChromeForClosedCard,
 		stopTranslateSession,
@@ -677,14 +687,10 @@ function PdfViewerInner({
 		translatesRef,
 		setTranslates,
 		upsertTranslate,
-		activeCard,
 		openCard,
 		hideActiveCard,
-		scheduleHoverHide,
-		cardHoverSurfaceRef,
 		activeCardRef,
 		activeSessionRef,
-		translateStreamingRef,
 	});
 	stopTranslateSessionRef.current = stopTranslateSessionImpl;
 	clearTranslateErrorRef.current = clearTranslateError;
@@ -849,10 +855,7 @@ function PdfViewerInner({
 	clearCitationPreviewRef.current = clearCitationPreview;
 	clearCrossrefPreviewRef.current = clearCrossrefPreview;
 
-	const { askPinAnchors, translatePinAnchors } = usePdfPinAnchors({
-		threads,
-		translates,
-	});
+	const { askPinAnchors } = usePdfPinAnchors({ threads });
 
 	/**
 	 * Gutter pins per page (1-based). Built once per mark/text change: pin
@@ -865,7 +868,6 @@ function PdfViewerInner({
 				highlights,
 				highlightAnchors,
 				askPinAnchors,
-				translatePinAnchors,
 				visualTraces,
 				pageTextMap,
 				paperTitle,
@@ -874,7 +876,6 @@ function PdfViewerInner({
 			highlights,
 			highlightAnchors,
 			askPinAnchors,
-			translatePinAnchors,
 			visualTraces,
 			pageTextMap,
 			paperTitle,
@@ -1170,19 +1171,36 @@ function PdfViewerInner({
 		paperAbsPath,
 	});
 
-	const autoTranslatedSelectionRef = useRef<typeof selectionMenu>(null);
+	const autoTranslatedSelectionRef = useRef<string | null>(null);
+
+	// A new drag-select is a fresh intent even when it covers text that was
+	// already auto-translated: the anchor key alone would collide with the last
+	// run and silently skip the new selection.
+	useEffect(() => {
+		if (isSelecting) autoTranslatedSelectionRef.current = null;
+	}, [isSelecting]);
 
 	// When enabled, translate as soon as text extraction has produced a usable
 	// selection anchor. Keep the toolbar open so the other selection actions stay
 	// available while the result card streams beside it.
+	//
+	// Keyed on the anchor, not on the menu object: re-placing the menu on scroll
+	// replaces the object (its `screen` moved) while keeping the anchor, so a
+	// menu-identity key re-translated once per wheel tick and stacked a 文A pin
+	// per tick.
 	useEffect(() => {
-		const quote = selectionMenu?.anchor.quote?.trim();
-		if (!selectionMenu || plainViewer || !autoTranslateSelection || !quote) {
+		const anchorKey = selectionAnchorKey(selectionMenu?.anchor);
+		if (
+			!selectionMenu ||
+			plainViewer ||
+			!autoTranslateSelection ||
+			!anchorKey
+		) {
 			autoTranslatedSelectionRef.current = null;
 			return;
 		}
-		if (autoTranslatedSelectionRef.current === selectionMenu) return;
-		autoTranslatedSelectionRef.current = selectionMenu;
+		if (autoTranslatedSelectionRef.current === anchorKey) return;
+		autoTranslatedSelectionRef.current = anchorKey;
 		translateSelection(selectionMenu.anchor);
 	}, [autoTranslateSelection, plainViewer, selectionMenu, translateSelection]);
 
@@ -1239,10 +1257,25 @@ function PdfViewerInner({
 
 	// ---- In-PDF highlight selection menu ----
 
+	// Scrolling means the reader moved on, so a translate card is dismissed
+	// rather than dragged along. Pointer wander alone must never close it,
+	// which is why the hover timer holds translate cards open.
+	//
+	// Gated on the pin actually moving: scroll events also fire when the
+	// listener is (re)subscribed and from EmbedPDF's selection/layout churn
+	// right after the card opens, and those must not flash the card away.
 	const rePlaceFloatingOnScroll = useCallback(() => {
-		rePlaceActiveCardOnScroll();
+		const pinMoved = rePlaceActiveCardOnScroll();
+		if (pinMoved && activeCard?.kind === "translate") {
+			hideActiveCard();
+		}
 		rePlaceSelectionMenu();
-	}, [rePlaceActiveCardOnScroll, rePlaceSelectionMenu]);
+	}, [
+		activeCard,
+		rePlaceActiveCardOnScroll,
+		rePlaceSelectionMenu,
+		hideActiveCard,
+	]);
 
 	// Boolean only — do not depend on selectionMenu.screen or re-place loops.
 	const selectionMenuOpen = selectionMenu != null;
@@ -1289,6 +1322,7 @@ function PdfViewerInner({
 	usePdfViewerHandle({
 		docId,
 		paperAbsPath,
+		defaultExportName,
 		onHandle,
 		annotationCap,
 		scrollRef,
@@ -1512,7 +1546,6 @@ function PdfViewerInner({
 				layout={pageLayout}
 				mode={pageMode}
 				handlers={pageHandlers}
-				hidden={privacyHidden}
 			/>
 		),
 		[
@@ -1526,7 +1559,6 @@ function PdfViewerInner({
 			pageLayout,
 			pageMode,
 			pageHandlers,
-			privacyHidden,
 		],
 	);
 
@@ -1646,7 +1678,6 @@ function PdfViewerInner({
 
 			{!translationOnly && (
 				<PdfCardStack
-					hidden={privacyHidden}
 					selectionMenu={{
 						state: plainViewer ? null : selectionMenu,
 						onHighlight: handleHighlight,
@@ -1656,7 +1687,6 @@ function PdfViewerInner({
 						showHighlight: !isRemotePaper && !plainViewer,
 						showTranslate: !isRemotePaper && !plainViewer,
 					}}
-					copiedLabelPos={copiedLabelPos}
 					citationPreview={{
 						state: citationPreview,
 						importMenu: citationImport

@@ -26,6 +26,7 @@
 		"catVault": "Vault",
 		"catLibrary": "Library",
 		"catTab": "Tab",
+		"catPdf": "PDF",
 		"settingsOpen": "Open Settings",
 		"settingsClose": "Close Settings",
 		"vaultOpen": "Open Vault…",
@@ -47,6 +48,7 @@
 		"tabSplitPane": "Split Pane Right",
 		"tabNext": "Next Tab",
 		"tabPrev": "Previous Tab",
+		"exportAnnotatedPdf": "Export Annotated PDF",
 		"wandOpen": "Magic Wand (Import by ID)"
 	},
 	"titlebar": {
@@ -87,7 +89,6 @@
 		"showPdf": "Show PDF version",
 		"openTexPdf": "Open PDF",
 		"texCompiling": "Compiling…",
-		"closeSplit": "Close split · {{title}}",
 		"contextClose": "Close",
 		"contextOpenNotes": "Open Notes",
 		"contextMoveToNewWindow": "Move to New Window",
@@ -109,11 +110,7 @@
 			"blue": "Blue",
 			"indigo": "Indigo",
 			"purple": "Purple"
-		},
-		"splitDropHint": "Drop to open as split",
-		"splitNotAllowed": "This item cannot open in a split pane.",
-		"emptyTitle": "No document open",
-		"emptyHint": "Pick a file or paper from the sidebar to open it in a tab."
+		}
 	},
 	"windows": {
 		"loading": "Loading…",

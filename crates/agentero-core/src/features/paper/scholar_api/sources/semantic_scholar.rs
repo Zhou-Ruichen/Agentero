@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use serde_json::Value;
 use std::time::Duration;
 
+use crate::features::paper::util::{str_field, str_field_at};
 use crate::features::scholar_api::client;
 use crate::features::scholar_api::identifiers::strip_arxiv_version;
 use crate::features::scholar_api::traits::AcademicApi;
@@ -84,7 +85,7 @@ impl SemanticScholarApi {
     /// trait, so it is exposed as an inherent method.
     pub async fn search_match(&self, title: &str) -> Result<Option<ApiPaper>, ApiError> {
         let url = format!(
-            "{API_BASE}/paper/search/match?query={}&fields=title,authors,year,venue,publicationVenue,journal,externalIds,citationCount,url",
+            "{API_BASE}/paper/search/match?query={}&fields=title,authors,year,publicationDate,venue,publicationVenue,journal,externalIds,citationCount,url",
             urlencoding::encode(title)
         );
         let value = client::get_json(&url).await?;
@@ -111,12 +112,12 @@ async fn fetch_by_id(paper_id: &str) -> Result<ApiPaper, ApiError> {
     let (prefix, rest) = paper_id.split_once(':').unwrap_or(("", paper_id));
     let url = if prefix.is_empty() {
         format!(
-            "{API_BASE}/paper/{}?fields=title,authors,year,venue,publicationVenue,journal,externalIds,citationCount,url",
+            "{API_BASE}/paper/{}?fields=title,authors,year,publicationDate,venue,publicationVenue,journal,externalIds,citationCount,url",
             urlencoding::encode(paper_id)
         )
     } else {
         format!(
-            "{API_BASE}/paper/{}:{}?fields=title,authors,year,venue,publicationVenue,journal,externalIds,citationCount,url",
+            "{API_BASE}/paper/{}:{}?fields=title,authors,year,publicationDate,venue,publicationVenue,journal,externalIds,citationCount,url",
             prefix,
             urlencoding::encode(rest)
         )
@@ -127,7 +128,7 @@ async fn fetch_by_id(paper_id: &str) -> Result<ApiPaper, ApiError> {
 
 async fn search_by_title(title: &str, limit: usize) -> Result<Vec<ApiPaper>, ApiError> {
     let url = format!(
-        "{API_BASE}/paper/search?query={}&limit={}&fields=title,authors,year,venue,publicationVenue,journal,externalIds,citationCount,url",
+        "{API_BASE}/paper/search?query={}&limit={}&fields=title,authors,year,publicationDate,venue,publicationVenue,journal,externalIds,citationCount,url",
         urlencoding::encode(title),
         (limit * 4).min(100)
     );
@@ -169,6 +170,7 @@ fn map_paper(item: &Value) -> Option<ApiPaper> {
         .unwrap_or_default();
 
     let year = item.get("year").and_then(|v| v.as_i64()).map(|y| y as i32);
+    let date = str_field(item, "publicationDate").or_else(|| year.map(|y| format!("{y:04}")));
     let venue = venue_from_paper(item);
 
     Some(ApiPaper {
@@ -181,7 +183,7 @@ fn map_paper(item: &Value) -> Option<ApiPaper> {
         title,
         authors,
         year,
-        date: year.map(|y| y.to_string()),
+        date,
         venue,
         volume: None,
         issue: None,
@@ -394,20 +396,6 @@ impl SemanticScholarApi {
 
 fn is_arxiv_doi(doi: &str) -> bool {
     doi.to_ascii_lowercase().contains("10.48550/arxiv.")
-}
-
-fn str_field(v: &Value, key: &str) -> Option<String> {
-    v.get(key)
-        .and_then(|x| x.as_str())
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-}
-
-fn str_field_at(v: &Value, pointer: &str) -> Option<String> {
-    v.pointer(pointer)
-        .and_then(|x| x.as_str())
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
 }
 
 #[cfg(test)]

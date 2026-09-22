@@ -33,6 +33,9 @@ pub enum AgentTemplate {
     /// (`~/.zcode`); the adapter auto-discovers the app-bundled CLI.
     /// Docs: https://github.com/william0wang/zcode-acp
     Zcode,
+    /// MiniMax Code CLI with native ACP (`mcode acp`).
+    /// Docs: https://agent.minimax.io/docs/cli/quick-start
+    MinimaxCode,
     Custom,
 }
 
@@ -54,6 +57,7 @@ impl<'de> serde::Deserialize<'de> for AgentTemplate {
             "dsh" => Self::Dsh,
             "kimi-code" => Self::KimiCode,
             "zcode" => Self::Zcode,
+            "minimax-code" => Self::MinimaxCode,
             "custom" => Self::Custom,
             other => {
                 return Err(serde::de::Error::custom(format!(
@@ -78,6 +82,7 @@ impl AgentTemplate {
             Self::Dsh => "dsh",
             Self::KimiCode => "kimi-code",
             Self::Zcode => "zcode",
+            Self::MinimaxCode => "minimax-code",
             Self::Custom => "custom",
         }
     }
@@ -237,6 +242,13 @@ pub struct CatalogEntry {
     pub resolved_path: Option<String>,
     /// ACP entrypoint command found — ACP layer (may equal host for native ACP agents).
     pub acp_command_available: bool,
+    /// Bundled ACP adapter tier present in app resources (offline fallback;
+    /// a PATH-installed adapter still wins over it).
+    #[serde(default)]
+    pub acp_bundled: bool,
+    /// Version of the bundled adapter (from the staging manifest), when staged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub acp_bundled_version: Option<String>,
     pub acp_status: CatalogAcpStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub registered_id: Option<String>,

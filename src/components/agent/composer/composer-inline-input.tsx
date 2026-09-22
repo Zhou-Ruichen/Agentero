@@ -15,6 +15,7 @@ import {
 	useRef,
 } from "react";
 import { useTranslation } from "react-i18next";
+import { usePromptInputAttachments } from "@/components/ai-elements/prompt-input";
 import { useImeGuard } from "@/hooks/use-ime-guard";
 import { AGENT_COMPOSER_INPUT_ATTR } from "@/lib/agent/composer-focus";
 import {
@@ -26,7 +27,9 @@ import {
 	parseInlineTokenParts,
 	stripInlineTokens,
 } from "@/lib/agent/composer-inline-tokens";
+import { decideComposerExternalValueSync } from "@/lib/agent/composer-sync";
 import { plazaMentionTitle } from "@/lib/agent/plaza-mention";
+import { filesFromDataTransfer } from "@/lib/core/file-accept";
 import { isImeKeyboardEvent } from "@/lib/core/ime";
 import { basenameOf } from "@/lib/core/path";
 import { cn, truncateToChars } from "@/lib/core/utils";
@@ -550,9 +553,12 @@ export const ComposerInlineInput = forwardRef<
 		ref,
 	) => {
 		const { t } = useTranslation("agent");
+		const attachments = usePromptInputAttachments();
 		const editorRef = useRef<HTMLDivElement>(null);
 		/** null until first paint so the initial `value` always hydrates into the DOM. */
 		const lastValueRef = useRef<string | null>(null);
+		const composingRef = useRef(false);
+		const awaitingParentEchoRef = useRef(false);
 		const { isBlockedByIme, isComposing, compositionProps } = useImeGuard();
 		const renderedTokensRef = useRef<Set<string>>(new Set());
 		const isFirstRenderRef = useRef(true);
@@ -562,6 +568,7 @@ export const ComposerInlineInput = forwardRef<
 			if (!root) return;
 			const next = serializeEditor(root);
 			lastValueRef.current = next;
+			awaitingParentEchoRef.current = true;
 			onValueChange(next);
 		}, [onValueChange]);
 
@@ -612,10 +619,23 @@ export const ComposerInlineInput = forwardRef<
 		);
 
 		useLayoutEffect(() => {
-			if (value === lastValueRef.current) return;
+			const root = editorRef.current;
+			const decision = decideComposerExternalValueSync({
+				nextValue: value,
+				lastKnownDomValue: lastValueRef.current,
+				currentDomValue: root ? serializeEditor(root) : "",
+				focused: Boolean(root && document.activeElement === root),
+				composing: composingRef.current || isComposing,
+				awaitingParentEcho: awaitingParentEchoRef.current,
+			});
+			if (decision === "skip") {
+				awaitingParentEchoRef.current = false;
+				return;
+			}
+			if (decision === "defer") return;
+			awaitingParentEchoRef.current = false;
 			lastValueRef.current = value;
 			renderValue(value);
-			const root = editorRef.current;
 			if (root && document.activeElement === root) {
 				placeCaretAtEnd(root);
 				scrollEditorToBottom();
@@ -681,6 +701,18 @@ export const ComposerInlineInput = forwardRef<
 		);
 
 		const handleInput = (_event: FormEvent<HTMLDivElement>) => {
+			emitFromDom();
+			scrollEditorToBottom();
+		};
+
+		const handleCompositionStart = () => {
+			composingRef.current = true;
+			compositionProps.onCompositionStart();
+		};
+
+		const handleCompositionEnd = () => {
+			composingRef.current = false;
+			compositionProps.onCompositionEnd();
 			emitFromDom();
 			scrollEditorToBottom();
 		};
@@ -811,6 +843,11 @@ export const ComposerInlineInput = forwardRef<
 
 		const handlePaste = (event: ClipboardEvent<HTMLDivElement>) => {
 			event.preventDefault();
+			const files = filesFromDataTransfer(event.clipboardData);
+			if (attachments.enabled && files.length > 0) {
+				attachments.add(files);
+				return;
+			}
 			const text = event.clipboardData.getData("text/plain");
 			if (!text) return;
 			document.execCommand("insertText", false, text);
@@ -889,7 +926,8 @@ export const ComposerInlineInput = forwardRef<
 						onKeyDown={handleKeyDown}
 						onPaste={handlePaste}
 						onClick={handleChipClick}
-						{...compositionProps}
+						onCompositionStart={handleCompositionStart}
+						onCompositionEnd={handleCompositionEnd}
 						{...aria}
 					/>
 				</div>

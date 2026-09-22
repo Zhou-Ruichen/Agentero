@@ -22,9 +22,49 @@ describe("escapeStrayLessThan", () => {
 		);
 	});
 
-	it("keeps tags, fragments, comments and spaced comparisons intact", () => {
-		const tags = '<div class="x">a</div> <> <!-- note --> </span> a < b';
+	it("keeps supported tags, comments and spaced comparisons intact", () => {
+		const tags = '<div class="x">a</div> <u>b</u> <br> <!-- note --> a < b';
 		expect(escapeStrayLessThan(tags)).toBe(tags);
+	});
+
+	it("escapes tags the editor does not support", () => {
+		expect(escapeStrayLessThan("<> <!-- note --> </span>")).toBe(
+			"&lt;> <!-- note --> &lt;/span>",
+		);
+		expect(escapeStrayLessThan("follow <Constraints> and <Workflow>.")).toBe(
+			"follow &lt;Constraints> and &lt;Workflow>.",
+		);
+		expect(escapeStrayLessThan("As an <AI Paper Analyst>, go")).toBe(
+			"As an &lt;AI Paper Analyst>, go",
+		);
+		expect(escapeStrayLessThan("\\<Constraints>")).toBe("\\<Constraints>");
+	});
+
+	it("leaves placeholder tags inside code and preserves raw html", () => {
+		const fenced = "```yaml\n- <Short title>\n```\nuse `<input>.pdf <output>`";
+		expect(escapeStrayLessThan(fenced)).toBe(fenced);
+		const raw = [
+			'<div align="center">',
+			'  <img src="assets/logo.png" width="200" />',
+			"  <b>Title</b>",
+			"</div>",
+		].join("\n");
+		expect(escapeStrayLessThan(raw)).toBe(raw);
+		expect(escapeStrayLessThan('<p align="center"><b>x</b></p>')).toBe(
+			'<p align="center"><b>x</b></p>',
+		);
+		expect(
+			escapeStrayLessThan('<callout variant="warning">\n\nBody\n\n</callout>'),
+		).toBe('<callout variant="warning">\n\nBody\n\n</callout>');
+	});
+
+	it("escapes an unclosed supported tag so the rest of the note survives", () => {
+		expect(escapeStrayLessThan("<div>hello\n\nafter")).toBe(
+			"&lt;div>hello\n\nafter",
+		);
+		expect(escapeStrayLessThan("<div>\n<Constraints>\n</div>")).toBe(
+			"<div>\n&lt;Constraints>\n</div>",
+		);
 	});
 
 	it("leaves code fences, block math and inline code/math untouched", () => {
@@ -81,6 +121,23 @@ describe("#533 note truncated at prose `<` comparison", () => {
 		expect(flat).toContain("为什么重要");
 		expect(flat).toContain("InstructPix2Pix");
 		expect(flat).toContain("大模型上下文范式");
+	});
+
+	it("keeps the note after an unsupported prose tag", () => {
+		const source = [
+			"use `<input>.pdf <output>` here",
+			"",
+			"## Workflow",
+			"",
+			"As an <AI Paper Analyst>, follow <Constraints>.",
+			"",
+			"tail",
+		].join("\n");
+		const flat = allText(deserialize(source));
+		expect(flat).toContain("<output>");
+		expect(flat).toContain("Workflow");
+		expect(flat).toContain("<AI Paper Analyst>");
+		expect(flat).toContain("tail");
 	});
 
 	it("round-trips: the escaped `<` survives a serialize → deserialize cycle", () => {

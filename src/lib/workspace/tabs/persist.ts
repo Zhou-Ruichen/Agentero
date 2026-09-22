@@ -30,12 +30,22 @@ function isCenterViewMode(v: unknown): v is CenterViewMode {
 }
 
 export function panelPersistParams(tab: DocTab): PanelPersistParams {
-	return { panelId: tab.id, path: tab.path, mode: tab.mode, title: tab.title };
+	return {
+		panelId: tab.id,
+		path: tab.path,
+		mode: tab.mode,
+		title: tab.title,
+	};
 }
 
 type LayoutPanelState = {
 	id?: string;
-	params?: { panelId?: string; path?: string; mode?: string; title?: string };
+	params?: {
+		panelId?: string;
+		path?: string;
+		mode?: string;
+		title?: string;
+	};
 };
 
 type LayoutLeafData = {

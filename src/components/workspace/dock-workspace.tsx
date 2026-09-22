@@ -45,6 +45,8 @@ import {
 } from "@/components/ui/tooltip";
 import { DocView, type DocViewProps } from "@/components/workspace/doc-view";
 import { AgenteroTabGroupChip } from "@/components/workspace/tab-group-chip";
+import { errorText } from "@/lib/core/error";
+import { notifyError } from "@/lib/core/notify";
 import { cn } from "@/lib/core/utils";
 import { isLibraryVirtualPath, isTrashVirtualPath } from "@/lib/paper/api";
 import { moveDocToWindow } from "@/lib/shell/leaf";
@@ -68,6 +70,7 @@ import {
 	tabNotesEligible,
 } from "@/lib/workspace/tabs";
 import { type CenterViewMode, isTexPath } from "@/lib/workspace/viewer";
+import { pdfHandleFor } from "@/lib/workspace/viewer/pdf-viewer-registry";
 
 /** Grey + paper tag palette (same swatches as library tags). */
 const TAB_GROUP_COLORS = ["grey", ...TAG_COLOR_IDS] as const;
@@ -193,6 +196,8 @@ function WorkspaceTab({
 	const [title, setTitle] = useState(api.title);
 	const middleClickRef = useRef(false);
 	const tab = tabsById.get(api.id) ?? null;
+	// Library is the resident tab — no close affordance.
+	const isLibrary = Boolean(tab && isLibraryVirtualPath(tab.path));
 	const canToggleHtml =
 		tab?.paperMeta?.type !== "html" &&
 		Boolean(tab?.htmlUrl) &&
@@ -216,13 +221,15 @@ function WorkspaceTab({
 	return (
 		<div
 			{...rest}
-			className="dv-default-tab"
+			className="dv-default-tab group"
 			onPointerDown={(event) => {
 				middleClickRef.current = event.button === 1;
 				onPointerDown?.(event);
 			}}
 			onPointerUp={(event) => {
-				if (middleClickRef.current && event.button === 1) close();
+				if (middleClickRef.current && event.button === 1 && !isLibrary) {
+					close();
+				}
 				middleClickRef.current = false;
 				onPointerUp?.(event);
 			}}
@@ -257,15 +264,17 @@ function WorkspaceTab({
 					</TooltipContent>
 				</Tooltip>
 			) : null}
-			<button
-				type="button"
-				className="dv-default-tab-action"
-				aria-label={t("tabs.close", { title })}
-				onPointerDown={(event) => event.preventDefault()}
-				onClick={() => close()}
-			>
-				<X className="size-3.5" />
-			</button>
+			{isLibrary ? null : (
+				<button
+					type="button"
+					className="dv-default-tab-action"
+					aria-label={t("tabs.close", { title })}
+					onPointerDown={(event) => event.preventDefault()}
+					onClick={close}
+				>
+					<X className="size-3.5" />
+				</button>
+			)}
 		</div>
 	);
 }
@@ -521,7 +530,7 @@ export const DockWorkspace = memo(
 		},
 		ref,
 	) {
-		const { t } = useTranslation("app");
+		const { t } = useTranslation(["app", "viewer"]);
 		const apiRef = useRef<DockviewApi | null>(null);
 		const workspaceRootRef = useRef<HTMLDivElement>(null);
 		const syncingRef = useRef(false);
@@ -860,12 +869,21 @@ export const DockWorkspace = memo(
 		 */
 		const getTabContextMenuItems = useCallback(
 			({ panel, group, api }: GetTabContextMenuItemsParams) => {
-				const hasOthers = group.panels.length > 1;
 				const existing = api.getTabGroupForPanel({
 					groupId: group.id,
 					panelId: panel.id,
 				});
 				const tab = tabsRef.current.find((t) => t.id === panel.id) ?? null;
+				const isLibraryPanel = (panelId: string) => {
+					const found =
+						tabsRef.current.find((candidate) => candidate.id === panelId) ??
+						null;
+					return Boolean(found && isLibraryVirtualPath(found.path));
+				};
+				const panelIsLibrary = isLibraryPanel(panel.id);
+				const closableOthers = group.panels.filter(
+					(p) => p !== panel && !isLibraryPanel(p.id),
+				).length;
 				const menu: Array<
 					| "separator"
 					| { label: string; disabled?: boolean; action: () => void }
@@ -907,18 +925,32 @@ export const DockWorkspace = memo(
 						},
 					});
 				}
+				if (tab?.mode === "pdf") {
+					const handle = pdfHandleFor(panel.id);
+					if (handle) {
+						menu.push({
+							label: t("viewer:pdf.exportAnnotatedPdf"),
+							action: () => {
+								handle
+									.exportAnnotatedPdf()
+									.catch((error: unknown) => notifyError(errorText(error)));
+							},
+						});
+					}
+				}
 				menu.push(
 					buildTabContextMenuItem({
 						label: t("tabs.contextClose"),
 						shortcut: formatShortcutById("closeTab"),
+						disabled: panelIsLibrary,
 						action: () => panel.api.close(),
 					}),
 					{
 						label: t("tabs.contextCloseOthers"),
-						disabled: !hasOthers,
+						disabled: closableOthers === 0,
 						action: () => {
 							for (const p of group.panels) {
-								if (p !== panel) p.api.close();
+								if (p !== panel && !isLibraryPanel(p.id)) p.api.close();
 							}
 						},
 					},
@@ -926,7 +958,7 @@ export const DockWorkspace = memo(
 						label: t("tabs.contextCloseAll"),
 						action: () => {
 							for (const p of [...group.panels]) {
-								p.api.close();
+								if (!isLibraryPanel(p.id)) p.api.close();
 							}
 						},
 					},

@@ -5,6 +5,7 @@ import {
 } from "@platejs/footnote";
 import { MarkdownPlugin, remarkMdx, remarkMention } from "@platejs/markdown";
 import { KEYS } from "platejs";
+import remarkDirective from "remark-directive";
 import remarkEmoji from "remark-emoji";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
@@ -13,7 +14,9 @@ import {
 	obsidianCalloutRules,
 	remarkObsidianCallout,
 } from "@/lib/markdown/callout";
+import { columnsRules, remarkColumns } from "@/lib/markdown/columns";
 import { htmlRules, remarkPreserveHtml } from "@/lib/markdown/html";
+import { imageGroupRules, remarkImageGroup } from "@/lib/markdown/image-group";
 import {
 	remarkWikiLinkLiteralPaths,
 	wikiLinkRules,
@@ -54,9 +57,18 @@ export const MarkdownKit = [
 				remarkMdx,
 				remarkMention,
 				remarkObsidianCallout,
+				remarkImageGroup,
+				remarkDirective,
+				remarkColumns,
 				remarkPreserveHtml,
 			],
-			rules: { ...wikiLinkRules, ...obsidianCalloutRules, ...htmlRules },
+			rules: {
+				...wikiLinkRules,
+				...obsidianCalloutRules,
+				...imageGroupRules,
+				...columnsRules,
+				...htmlRules,
+			},
 		},
 	}),
 	MarkdownPastePlugin,

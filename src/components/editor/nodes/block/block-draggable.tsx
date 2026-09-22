@@ -1,12 +1,21 @@
 "use client";
 
-import { DndPlugin, useDraggable, useDropLine } from "@platejs/dnd";
+import {
+	DndPlugin,
+	type DragItemNode,
+	type ElementDragItemNode,
+	getDropPath,
+	onDropNode,
+	onHoverNode,
+	useDraggable,
+	useDropLine,
+} from "@platejs/dnd";
 import { expandListItemsWithChildren } from "@platejs/list";
 import {
 	BlockSelectionPlugin,
 	useBlockSelected,
 } from "@platejs/selection/react";
-import { getPluginByType, type TElement } from "platejs";
+import { getPluginByType, NodeApi, type TElement } from "platejs";
 import {
 	MemoizedChildren,
 	type PlateEditor,
@@ -17,11 +26,20 @@ import {
 	usePluginOptions,
 } from "platejs/react";
 import * as React from "react";
+import type { DropTargetMonitor } from "react-dnd";
 
 import { setBlockDragAnchor } from "@/components/editor/nodes/block/block-drag-preview";
 import { BlockHandleMenu } from "@/components/editor/nodes/block/block-handle-menu";
 import { cn } from "@/lib/core/utils";
 import { isBlankParagraph } from "@/lib/markdown/block-selection";
+import {
+	addColumnToGroup,
+	COLUMN_GROUP_KEY,
+	convertImageGroupToColumnGroup,
+	createColumnGroupFromBlocks,
+	MAX_COLUMNS,
+} from "@/lib/markdown/columns";
+import { IMAGE_GROUP_KEY, isImageishType } from "@/lib/markdown/image-group";
 
 /**
  * Mirrors the two global drag/marquee flags onto the editable root as data
@@ -56,24 +74,138 @@ export function BlockDragStateBridge() {
 	return null;
 }
 
+function isInsideColumnGroup(editor: PlateEditor, path: number[]): boolean {
+	if (path.length !== 2) return false;
+	const parent = NodeApi.get(editor, [path[0]]) as TElement | undefined;
+	return parent?.type === COLUMN_GROUP_KEY;
+}
+
 export const BlockDraggable: RenderNodeWrapper = (props) => {
 	const { editor, path } = props;
 	if (editor.dom.readOnly) return;
-	if (path.length !== 1) return;
+	if (path.length !== 1 && !isInsideColumnGroup(editor, path)) return;
 	return (childProps: PlateElementProps) => <Draggable {...childProps} />;
 };
 
+export function isElementDragItemNode(
+	dragItem: DragItemNode,
+): dragItem is ElementDragItemNode {
+	return "id" in dragItem && dragItem.id != null;
+}
+
+/**
+ * 单块图片/组的拖拽在图片类目标上横向落位(左右半分),与目标并排成组;
+ * 多块拖拽与非图片块保持纵向(上下半分)的常规行为。
+ */
+function imageGroupDropOrientation(
+	editor: PlateEditor,
+	dragItem: ElementDragItemNode,
+): "horizontal" | "vertical" {
+	if (Array.isArray(dragItem.id) && dragItem.id.length > 1) return "vertical";
+	if (!dragItem.element || !isImageishType(editor, dragItem.element.type))
+		return "vertical";
+	return "horizontal";
+}
+
 function Draggable(props: PlateElementProps) {
-	const { children, editor, element } = props;
+	const { children, editor, element, path } = props;
 	const blockSelectionApi = editor.getApi(BlockSelectionPlugin).blockSelection;
 
-	const { isDragging, nodeRef, handleRef } = useDraggable({
+	// 图片/组目标需要横向 hover/drop,而 useDraggable 内部自建 nodeRef 在
+	// 覆盖回调里拿不到 —— 自建一个,既传入 hook 也挂到节点上。
+	const dropNodeRef = React.useRef<HTMLDivElement | null>(null);
+	const isImageishTarget = isImageishType(editor, element.type);
+	const isTopLevel = Array.isArray(path) && path.length === 1;
+	const [columnDrop, setColumnDrop] = React.useState(false);
+
+	const { isDragging, handleRef } = useDraggable({
 		element,
+		nodeRef: dropNodeRef,
 		onDropHandler: (_, { dragItem }) => {
 			const id = (dragItem as { id: string[] | string }).id;
 			blockSelectionApi.add(id);
 			return false;
 		},
+		// 顶层块额外处理右侧分栏落位;图片类目标保持横向落线/落位。
+		...(isTopLevel && {
+			drop: {
+				hover: (dragItem: DragItemNode, monitor: DropTargetMonitor) => {
+					// 指针悬在组内图片 item 上时,更深的 item drop 目标同样会收到
+					// hover —— 让出落线,避免外层覆盖 item 的精确位置。
+					if (!monitor.isOver({ shallow: true })) {
+						setColumnDrop(false);
+						return;
+					}
+					if (
+						isColumnDropZone(
+							editor,
+							dragItem,
+							element,
+							monitor,
+							dropNodeRef,
+							path,
+						)
+					) {
+						setColumnDrop(true);
+						return;
+					}
+					setColumnDrop(false);
+					onHoverNode(editor, {
+						dragItem,
+						element,
+						monitor,
+						nodeRef: dropNodeRef,
+						orientation: isElementDragItemNode(dragItem)
+							? imageGroupDropOrientation(editor, dragItem)
+							: "vertical",
+					});
+				},
+				drop: (dragItem: DragItemNode, monitor: DropTargetMonitor) => {
+					setColumnDrop(false);
+					if (columnDrop && isElementDragItemNode(dragItem)) {
+						handleColumnDrop(
+							editor,
+							dragItem,
+							element,
+							path,
+							blockSelectionApi,
+						);
+						return;
+					}
+					// 文件拖放保持 stock 语义(纵向落位插入),图片文件仍可拖入。
+					if (!isElementDragItemNode(dragItem)) {
+						const result = getDropPath(editor, {
+							dragItem,
+							element,
+							monitor,
+							nodeRef: dropNodeRef,
+							orientation: "vertical",
+						});
+						const onDropFiles = editor.getOptions(DndPlugin).onDropFiles;
+						if (!result || !onDropFiles) return;
+						onDropFiles({
+							id: element.id as string,
+							dragItem,
+							editor,
+							monitor,
+							nodeRef: dropNodeRef,
+							target: result.to,
+						});
+						return;
+					}
+					// 复刻 onDropHandler(drop 后恢复块选),再走横向落位;
+					// 左≡上、右≡下,moveNodes 落到目标旁,成组交给 normalize。
+					blockSelectionApi.add(dragItem.id);
+					onDropNode(editor, {
+						dragItem,
+						element,
+						monitor,
+						nodeRef: dropNodeRef,
+						orientation: imageGroupDropOrientation(editor, dragItem),
+					});
+				},
+			},
+		}),
 	});
 
 	const [dragButtonTop, setDragButtonTop] = React.useState(0);
@@ -185,7 +317,7 @@ function Draggable(props: PlateElementProps) {
 
 			{/* biome-ignore lint/a11y/noStaticElementInteractions: right-click selects the block */}
 			<div
-				ref={nodeRef}
+				ref={dropNodeRef}
 				className="slate-blockWrapper flow-root"
 				onContextMenu={(event) =>
 					editor
@@ -194,7 +326,8 @@ function Draggable(props: PlateElementProps) {
 				}
 			>
 				<MemoizedChildren>{children}</MemoizedChildren>
-				<DropLine />
+				<DropLine orientation={isImageishTarget ? "horizontal" : "vertical"} />
+				<ColumnDropLine show={columnDrop} />
 			</div>
 		</div>
 	);
@@ -229,20 +362,88 @@ function Gutter({
 	);
 }
 
-const DropLine = React.memo(function DropLine() {
-	const { dropLine } = useDropLine();
+const DropLine = React.memo(function DropLine({
+	orientation,
+}: {
+	orientation: "horizontal" | "vertical";
+}) {
+	const { dropLine } = useDropLine({ orientation });
 	if (!dropLine) return null;
 
 	return (
 		<div
 			className={cn(
-				"slate-dropLine pointer-events-none absolute inset-x-0 z-10 h-0.5 bg-foreground/40",
-				dropLine === "top" && "-top-px",
-				dropLine === "bottom" && "-bottom-px",
+				"slate-dropLine pointer-events-none absolute z-10 bg-foreground/40",
+				dropLine === "top" && "-top-px inset-x-0 h-0.5",
+				dropLine === "bottom" && "-bottom-px inset-x-0 h-0.5",
+				dropLine === "left" && "-left-px inset-y-0 w-0.5",
+				dropLine === "right" && "-right-px inset-y-0 w-0.5",
 			)}
 		/>
 	);
 });
+
+const COLUMN_DROP_THRESHOLD = 0.8;
+
+const ColumnDropLine = React.memo(function ColumnDropLine({
+	show,
+}: {
+	show: boolean;
+}) {
+	if (!show) return null;
+	return (
+		<div className="pointer-events-none absolute inset-y-0 -right-1 z-10 w-0.5 bg-foreground/60" />
+	);
+});
+
+function isColumnDropZone(
+	_editor: PlateEditor,
+	dragItem: DragItemNode,
+	targetElement: TElement,
+	monitor: DropTargetMonitor,
+	nodeRef: React.RefObject<HTMLDivElement | null>,
+	targetPath: number[],
+): boolean {
+	if (!isElementDragItemNode(dragItem)) return false;
+	if (Array.isArray(dragItem.id) && dragItem.id.length > 1) return false;
+	if (targetPath.length !== 1) return false;
+	const sourceId = Array.isArray(dragItem.id) ? dragItem.id[0] : dragItem.id;
+	if (sourceId === targetElement.id) return false;
+	if (
+		targetElement.type === COLUMN_GROUP_KEY &&
+		(targetElement.children as TElement[]).length >= MAX_COLUMNS
+	) {
+		return false;
+	}
+	const clientOffset = monitor.getClientOffset();
+	const rect = nodeRef.current?.getBoundingClientRect();
+	if (!clientOffset || !rect || rect.width <= 0) return false;
+	const relativeX = clientOffset.x - rect.left;
+	return relativeX >= rect.width * COLUMN_DROP_THRESHOLD;
+}
+
+function handleColumnDrop(
+	editor: PlateEditor,
+	dragItem: ElementDragItemNode,
+	targetElement: TElement,
+	targetPath: number[],
+	blockSelectionApi: { add: (id: string | string[]) => void },
+): void {
+	const sourceId = Array.isArray(dragItem.id) ? dragItem.id[0] : dragItem.id;
+	const sourceEntry = editor.api.node({ id: sourceId, at: [] });
+	if (!sourceEntry) return;
+	const [, sourcePath] = sourceEntry;
+	if (!sourcePath) return;
+
+	if (targetElement.type === COLUMN_GROUP_KEY) {
+		addColumnToGroup(editor, targetPath, sourcePath);
+	} else if (targetElement.type === IMAGE_GROUP_KEY) {
+		convertImageGroupToColumnGroup(editor, targetPath, sourcePath);
+	} else {
+		createColumnGroupFromBlocks(editor, targetPath, sourcePath);
+	}
+	blockSelectionApi.add(dragItem.id);
+}
 
 function isIdInDraggingSet(
 	id: unknown,

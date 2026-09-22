@@ -699,6 +699,25 @@
 		transparent;
 }
 
+/*
+ * Always-visible variant for content clipped by design (translate card):
+ * the thumb stays shown so the overflow is discoverable. Must come after the
+ * rules above to win at equal specificity; `overflow-y: auto` still means no
+ * scrollbar renders until the content actually clips.
+ */
+.agentero-scroll-visible {
+	scrollbar-color: color-mix(in oklch, var(--muted-foreground) 32%, transparent)
+		transparent;
+}
+
+.agentero-scroll-visible::-webkit-scrollbar-thumb {
+	background-color: color-mix(
+		in oklch,
+		var(--muted-foreground) 28%,
+		transparent
+	);
+}
+
 /* dockview: map native theme class to app design tokens */
 .agentero-dockview,
 .agentero-dockview-theme {
@@ -1029,17 +1048,6 @@ body.agentero-dockview-dragging * {
 	color: #c9d1d9;
 }
 
-/*
- * Privacy mode: when the window loses focus (see `usePdfPrivacy`), fade out
- * PDF annotation / comment / translate overlays so a screenshot of a
- * different window never leaks them. The page rasters stay visible.
- * Specificity (0,2,0) beats any single utility class on the tagged overlay.
- */
-.pdf-privacy-hidden .pdf-privacy-hide {
-	opacity: 0;
-	pointer-events: none;
-	transition: opacity 150ms ease;
-}
 .dark .agentero-codeblock .hljs-bullet {
 	color: #f2cc60;
 }

@@ -1,18 +1,15 @@
 //! Paper ref resolution and list/get shaping for MCP tools.
 
 use crate::core::error::AppError;
-use crate::features::paper::catalog::papers::{self, PaperRecord, PaperTag};
+use crate::features::paper::catalog::papers::{self, PaperRecord, PaperRefLookup};
 use serde::Serialize;
 use std::path::Path;
-
-const TAG_COLORS: &[&str] = &[
-    "red", "orange", "yellow", "green", "teal", "blue", "indigo", "purple",
-];
 
 /// MCP / camelCase field names allowed on `paper_list` (beyond id/path/title).
 const PAPER_LIST_EXTRA_FIELDS: &[&str] = &[
     "authors",
     "year",
+    "date",
     "tags",
     "doi",
     "arxivId",
@@ -24,56 +21,18 @@ const PAPER_LIST_EXTRA_FIELDS: &[&str] = &[
     "is_read",
 ];
 
-pub fn looks_like_path(ref_: &str) -> bool {
-    let t = ref_.trim();
-    t.contains('/') || t.contains('\\') || t.starts_with("papers")
-}
-
+/// Resolve a paper reference with MCP-flavoured error text.
 pub fn resolve_paper(vault: &Path, ref_: &str) -> Result<PaperRecord, AppError> {
-    let ref_ = ref_.trim();
-    if ref_.is_empty() {
-        return Err(AppError::message("paper ref is required"));
+    let reference = ref_.trim();
+    match papers::lookup_paper_ref(vault, reference)? {
+        PaperRefLookup::Found(record) => Ok(*record),
+        PaperRefLookup::NotFound => Err(AppError::message(format!("paper not found: {reference}"))),
+        PaperRefLookup::Ambiguous(paths) => Err(AppError::message(format!(
+            "paper id '{reference}' is ambiguous ({} matches): {}",
+            paths.len(),
+            paths.join(", ")
+        ))),
     }
-    if looks_like_path(ref_) {
-        let path = ref_.replace('\\', "/").trim_matches('/').to_string();
-        return papers::get_by_path(vault, &path)?
-            .ok_or_else(|| AppError::message(format!("paper not found: {ref_}")));
-    }
-    let matches = papers::list_by_id(vault, ref_)?;
-    match matches.len() {
-        0 => Err(AppError::message(format!("paper not found: {ref_}"))),
-        1 => Ok(matches.into_iter().next().expect("len 1")),
-        n => {
-            let paths: Vec<&str> = matches.iter().map(|p| p.path.as_str()).collect();
-            Err(AppError::message(format!(
-                "paper id '{ref_}' is ambiguous ({n} matches): {}",
-                paths.join(", ")
-            )))
-        }
-    }
-}
-
-pub fn parse_tag_spec(raw: &str) -> Result<PaperTag, AppError> {
-    let value = raw.trim();
-    if value.is_empty() {
-        return Err(AppError::message("tag name must not be empty"));
-    }
-    let Some((name, color)) = value.rsplit_once(':') else {
-        return Ok(PaperTag::new(value));
-    };
-    if name.trim().is_empty() {
-        return Err(AppError::message("tag name must not be empty"));
-    }
-    if TAG_COLORS
-        .iter()
-        .any(|id| id.eq_ignore_ascii_case(color.trim()))
-    {
-        return Ok(PaperTag {
-            name: name.trim().to_string(),
-            color: Some(color.trim().to_ascii_lowercase()),
-        });
-    }
-    Ok(PaperTag::new(value))
 }
 
 fn strip_internal_tags(row: &mut PaperRecord) {
@@ -90,6 +49,9 @@ pub struct PaperListItem {
     pub authors: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub year: Option<i32>,
+    /// Publication date, `YYYY` / `YYYY-MM` / `YYYY-MM-DD` by precision.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub date: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tags: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -112,6 +74,7 @@ impl PaperListItem {
             title: row.title.clone(),
             authors: None,
             year: None,
+            date: None,
             tags: None,
             doi: None,
             arxiv_id: None,
@@ -128,6 +91,7 @@ impl PaperListItem {
             title: row.title.clone(),
             authors: Some(row.authors.clone()),
             year: row.year,
+            date: row.date.clone(),
             tags: Some(row.tags.iter().map(|t| t.name.clone()).collect()),
             doi: row.doi.clone(),
             arxiv_id: row.arxiv_id.clone(),
@@ -156,6 +120,7 @@ impl PaperListItem {
             match f {
                 "authors" => item.authors = Some(row.authors.clone()),
                 "year" => item.year = row.year,
+                "date" => item.date = row.date.clone(),
                 "tags" => {
                     item.tags = Some(row.tags.iter().map(|t| t.name.clone()).collect());
                 }

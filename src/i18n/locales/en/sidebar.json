@@ -124,7 +124,7 @@
 		"rescanFailed": "Rescan failed.",
 		"colTitle": "Title",
 		"colAuthors": "Authors",
-		"colYear": "Year",
+		"colDate": "Date",
 		"colTags": "Tags",
 		"colId": "ID",
 		"colPublication": "Publication",
@@ -232,7 +232,8 @@
 				"parse": "Could not parse this feed.",
 				"http": "The feed server returned an error.",
 				"fetch": "Could not fetch this feed.",
-				"body": "Could not read the feed body."
+				"body": "Could not read the feed body.",
+				"opFailed": "The feed operation failed."
 			}
 		},
 		"skills": {
@@ -352,7 +353,7 @@
 		"selectPrompt": "Select a paper to see metadata.",
 		"title": "Title",
 		"authors": "Authors",
-		"year": "Year",
+		"date": "Date",
 		"publication": "Publication",
 		"tags": "Tags",
 		"addTag": "Add tag…",
@@ -374,7 +375,7 @@
 			"fieldTitle": "Title",
 			"fieldAuthors": "Authors",
 			"authorsPlaceholder": "One author per line",
-			"fieldYear": "Year",
+			"fieldDate": "Date",
 			"fieldArxivId": "arXiv ID",
 			"fieldDoi": "DOI",
 			"fieldPublication": "Publication",

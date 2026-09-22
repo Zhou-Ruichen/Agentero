@@ -34,14 +34,25 @@ import {
 } from "@/lib/pdf/selection";
 import type { PdfTranslateRecord } from "@/lib/pdf/translate/types";
 
+/**
+ * Pin travel (px) below which a scroll event is treated as layout jitter or a
+ * sub-pixel re-render rather than the reader moving through the document.
+ */
+const SCROLL_MOVE_TOLERANCE_PX = 2;
+
+/**
+ * Accumulated pin travel (px) that dismisses a translate card. Sized for a
+ * couple of deliberate scroll gestures — one wheel notch or a short trackpad
+ * flick is far less — so a nudge never closes a translation mid-read.
+ */
+const SCROLL_DISMISS_TRAVEL_PX = 200;
+
 export type UsePdfCardsOptions = {
 	hostRef: RefObject<HTMLDivElement | null>;
 	pageTextMapRef: RefObject<Map<number, NormalizedRect[]>>;
 	threadsRef: RefObject<PdfAskThread[]>;
 	translatesRef: RefObject<PdfTranslateRecord[]>;
 	visualTracesRef: RefObject<PdfVisualSessionTrace[]>;
-	/** Translate cards stay open past hover while their run is still streaming. */
-	translateStreamingRef: RefObject<boolean>;
 	/** Cluster-owned chrome reset for the card being opened (ask / translate errors). */
 	onCardOpen: (card: ActiveSelectionCard) => void;
 	/**
@@ -63,13 +74,15 @@ export type PdfCards = {
 	openCard: (card: ActiveSelectionCard) => void;
 	hideActiveCard: () => void;
 	placeActiveCard: (card: ActiveSelectionCard) => boolean;
-	/** Re-anchor the open card after the page moved under it. */
-	rePlaceActiveCardOnScroll: () => void;
+	/**
+	 * Re-anchor the open card after the page moved under it. Returns true once
+	 * the pin has travelled `SCROLL_DISMISS_TRAVEL_PX` since the card opened,
+	 * i.e. the reader has scrolled a couple of gestures rather than nudged.
+	 */
+	rePlaceActiveCardOnScroll: () => boolean;
 	cancelHoverHide: () => void;
 	markCardHoverEnter: () => void;
 	scheduleHoverHide: () => void;
-	/** True while the pointer is over the active card, pin, or source fragment. */
-	cardHoverSurfaceRef: RefObject<boolean>;
 };
 
 export function usePdfCards({
@@ -78,7 +91,6 @@ export function usePdfCards({
 	threadsRef,
 	translatesRef,
 	visualTracesRef,
-	translateStreamingRef,
 	onCardOpen,
 	onCardClose,
 	stopTranslateSession,
@@ -90,20 +102,21 @@ export function usePdfCards({
 	const activeCardRef = useRef<ActiveSelectionCard | null>(null);
 	activeCardRef.current = activeCard;
 	const cardScreenRef = useRef<CardScreenPoint | null>(null);
+	/** Pin travel accumulated since the open card was placed (see scroll dismiss). */
+	const scrollTravelRef = useRef(0);
 
 	/**
 	 * Sticky hover contract for the open card: hide `CARD_HOVER_HIDE_MS` after
 	 * the pointer leaves every hover surface (pin / card / source fragment),
-	 * never while the floating dialog is hovered / focused, and not while a
-	 * translate run is still streaming. `hideActiveCard` needs the hook's
+	 * never while the floating dialog is hovered / focused, and never
+	 * auto-hide for translate — the user reads the translation, so only an
+	 * explicit hide/delete closes it. `hideActiveCard` needs the hook's
 	 * surface ref, so the hook receives it through a ref assigned below —
 	 * both stay identity-stable (`onCardClose` already is).
 	 */
-	const holdTranslateStreaming = useCallback(
-		() =>
-			activeCardRef.current?.kind === "translate" &&
-			translateStreamingRef.current === true,
-		[translateStreamingRef],
+	const holdCardOpen = useCallback(
+		() => activeCardRef.current?.kind === "translate",
+		[],
 	);
 	const hideActiveCardRef = useRef<() => void>(() => undefined);
 	const hideViaRef = useCallback(() => hideActiveCardRef.current(), []);
@@ -116,12 +129,13 @@ export function usePdfCards({
 	} = useStickyHoverHide({
 		delayMs: CARD_HOVER_HIDE_MS,
 		hide: hideViaRef,
-		hold: holdTranslateStreaming,
+		hold: holdCardOpen,
 	});
 
 	const hideActiveCard = useCallback(() => {
 		onCardClose(activeCardRef.current);
 		cardHoverSurfaceRef.current = false;
+		scrollTravelRef.current = 0;
 		setActiveCard(null);
 		cardScreenRef.current = null;
 		setCardScreen(null);
@@ -212,8 +226,30 @@ export function usePdfCards({
 		[placeActiveCard],
 	);
 
+	/**
+	 * Re-anchor the open card after the page moved under it, accumulating how
+	 * far the pin has travelled since the card opened. Returns true once that
+	 * travel passes `SCROLL_DISMISS_TRAVEL_PX`, so callers can tell a real
+	 * scroll apart from scroll events that fire on listener (re)subscribe or
+	 * from EmbedPDF selection / layout churn.
+	 */
 	const rePlaceActiveCardOnScroll = useCallback(() => {
-		if (activeCardRef.current) placeActiveCard(activeCardRef.current);
+		const card = activeCardRef.current;
+		if (!card) return false;
+		const before = cardScreenRef.current;
+		placeActiveCard(card);
+		const after = cardScreenRef.current;
+		if (!before || !after) return false;
+		if (before.preferRight !== after.preferRight) return true;
+		const dx = Math.abs(before.x - after.x);
+		const dy = Math.abs(before.y - after.y);
+		if (dx <= SCROLL_MOVE_TOLERANCE_PX && dy <= SCROLL_MOVE_TOLERANCE_PX) {
+			return false;
+		}
+		// Diagonal travel counts on its longer axis, so a pinch/zoom-style nudge
+		// is not discounted for being partly horizontal.
+		scrollTravelRef.current += Math.max(dx, dy);
+		return scrollTravelRef.current > SCROLL_DISMISS_TRAVEL_PX;
 	}, [placeActiveCard]);
 
 	const openCard = useCallback(
@@ -223,6 +259,7 @@ export function usePdfCards({
 			// pin / newly mounted modal (mount under cursor skips pointerenter).
 			cancelHoverHide();
 			cardHoverSurfaceRef.current = true;
+			scrollTravelRef.current = 0;
 			if (
 				activeCardRef.current?.kind === "translate" &&
 				(card.kind !== "translate" || card.id !== activeCardRef.current.id)
@@ -264,6 +301,5 @@ export function usePdfCards({
 		cancelHoverHide,
 		markCardHoverEnter,
 		scheduleHoverHide,
-		cardHoverSurfaceRef,
 	};
 }

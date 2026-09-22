@@ -3,6 +3,7 @@
 use async_trait::async_trait;
 use serde_json::Value;
 
+use crate::features::paper::util::{collapse_ws, str_field};
 use crate::features::scholar_api::client;
 use crate::features::scholar_api::traits::AcademicApi;
 use crate::features::scholar_api::{
@@ -74,6 +75,31 @@ impl AcademicApi for CrossrefApi {
 
 const CROSSREF_MAILTO: &str = "agentero@users.noreply.github.com";
 
+/// Crossref `date-parts[0]` → `YYYY` / `YYYY-MM` / `YYYY-MM-DD`; parts the
+/// publisher did not disclose are omitted.
+fn date_from_parts(parts: &[Value]) -> Option<String> {
+    let year = parts.first()?.as_i64()?;
+    if !(1000..=2100).contains(&year) {
+        return None;
+    }
+    let mut date = format!("{year:04}");
+    let month = parts
+        .get(1)
+        .and_then(|v| v.as_i64())
+        .filter(|m| (1..=12).contains(m));
+    if let Some(month) = month {
+        date.push_str(&format!("-{month:02}"));
+        let day = parts
+            .get(2)
+            .and_then(|v| v.as_i64())
+            .filter(|d| (1..=31).contains(d));
+        if let Some(day) = day {
+            date.push_str(&format!("-{day:02}"));
+        }
+    }
+    Some(date)
+}
+
 fn map_reference(item: &Value) -> Option<ApiPaper> {
     let title = str_field(item, "article-title").or_else(|| str_field(item, "volume-title"));
     let doi = str_field(item, "DOI");
@@ -122,7 +148,7 @@ async fn fetch_by_doi(doi: &str) -> Result<ApiPaper, ApiError> {
 
 async fn search_by_title(title: &str, limit: usize) -> Result<Vec<ApiPaper>, ApiError> {
     let url = format!(
-        "{API_BASE}?query.title={}&rows={}&select=title,author,published-print,published-online,container-title,volume,issue,page,DOI,publisher,URL,type,abstract,is-referenced-by-count",
+        "{API_BASE}?query.title={}&rows={}&select=title,author,issued,published-print,published-online,container-title,volume,issue,page,DOI,publisher,URL,type,abstract,is-referenced-by-count",
         urlencoding::encode(title),
         limit
     );
@@ -172,11 +198,17 @@ fn map_work(message: &Value, known_doi: Option<&str>) -> Option<ApiPaper> {
         }
     }
 
-    let date = message
-        .pointer("/issued/date-parts/0/0")
-        .and_then(|v| v.as_i64())
-        .map(|y| y.to_string());
-    let year = date.as_ref().and_then(|d| d.parse::<i32>().ok());
+    let date = ["issued", "published-online", "published-print"]
+        .iter()
+        .find_map(|key| {
+            message
+                .pointer(&format!("/{key}/date-parts/0"))
+                .and_then(|v| v.as_array())
+                .and_then(|parts| date_from_parts(parts))
+        });
+    let year = date
+        .as_ref()
+        .and_then(|d| d.get(..4).and_then(|y| y.parse::<i32>().ok()));
 
     // Crossref abstracts are JATS XML; strip tags so downstream text stays plain.
     let abstract_text = str_or_first(message, "abstract").map(|s| {
@@ -224,14 +256,6 @@ fn map_work(message: &Value, known_doi: Option<&str>) -> Option<ApiPaper> {
     })
 }
 
-fn str_field(message: &Value, key: &str) -> Option<String> {
-    message
-        .get(key)
-        .and_then(|v| v.as_str())
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-}
-
 fn str_or_first(message: &Value, key: &str) -> Option<String> {
     let v = message.get(key)?;
     let s = match v {
@@ -245,10 +269,6 @@ fn str_or_first(message: &Value, key: &str) -> Option<String> {
     } else {
         Some(s)
     }
-}
-
-fn collapse_ws(s: &str) -> String {
-    s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 #[cfg(test)]
@@ -279,12 +299,33 @@ mod tests {
             Some("10.48550/arXiv.1706.03762")
         );
         assert_eq!(paper.year, Some(2017));
+        assert_eq!(paper.date.as_deref(), Some("2017"));
         assert_eq!(paper.venue.as_deref(), Some("NeurIPS"));
         assert_eq!(
             paper.abstract_text.as_deref(),
             Some("The dominant sequence transduction models.")
         );
         assert_eq!(paper.authors, vec!["Ashish Vaswani", "Noam Shazeer"]);
+    }
+
+    #[test]
+    fn maps_publication_date_precision() {
+        let day = json!({
+            "title": ["T"], "DOI": "10.1/x",
+            "issued": { "date-parts": [[2017, 6, 12]] }
+        });
+        let paper = map_work(&day, None).expect("mapped");
+        assert_eq!(paper.date.as_deref(), Some("2017-06-12"));
+        assert_eq!(paper.year, Some(2017));
+
+        // Title search selects print/online instead of `issued`.
+        let online = json!({
+            "title": ["T"], "DOI": "10.1/x",
+            "published-online": { "date-parts": [[2023, 8]] }
+        });
+        let paper = map_work(&online, None).expect("mapped");
+        assert_eq!(paper.date.as_deref(), Some("2023-08"));
+        assert_eq!(paper.year, Some(2023));
     }
 
     #[test]
