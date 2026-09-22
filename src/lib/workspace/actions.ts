@@ -1786,6 +1786,9 @@ export function hydratePlaceholderTabs(tabIds: readonly string[]): void {
 		if (!tab || tab.loaded || tab.texCompiling || placeholderLoads.has(id)) {
 			continue;
 		}
+		// Paper ownership needs the tree: dotted folder names (e.g. arXiv IDs)
+		// otherwise look like files and resolve to their parent org folder.
+		if (vaultStore.getState().treeLoading && isUnderPapers(tab.path)) continue;
 		placeholderLoads.add(id);
 		void (async () => {
 			const vaultState = vaultStore.getState();

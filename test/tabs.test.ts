@@ -1,6 +1,12 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import * as tauri from "@/lib/core/tauri";
 import { LIBRARY_VIRTUAL_PATH } from "@/lib/paper/api";
-import { closeTab, syncUpdatedPaperTabs } from "@/lib/workspace/actions";
+import { vaultStore } from "@/lib/vault/store";
+import {
+	closeTab,
+	hydratePlaceholderTabs,
+	syncUpdatedPaperTabs,
+} from "@/lib/workspace/actions";
 import { getTabs, setTabs } from "@/lib/workspace/store";
 import {
 	createNotesSplitPane,
@@ -27,6 +33,7 @@ import {
 	tabIsPaperNotes,
 	tabNotesEligible,
 } from "@/lib/workspace/tabs";
+import * as tabResources from "@/lib/workspace/tabs/resources";
 
 function makeTab(path: string, overrides: Partial<DocTab> = {}): DocTab {
 	return { ...createPlaceholderTab(path), ...overrides };
@@ -67,6 +74,37 @@ describe("createPlaceholderTab", () => {
 		expect(tab.title).toBe("Library");
 		expect(tab.mode).toBe("markdown");
 	});
+});
+
+it("restores a dotted paper folder only after the tree identifies its owner", async () => {
+	const path = "/vault/papers/topic/2606.04046";
+	const tab = makeTab(path, { mode: "pdf" });
+	const previousVault = vaultStore.getState();
+	const previousTabs = getTabs();
+	vi.spyOn(tauri, "isTauri").mockReturnValue(true);
+	const load = vi
+		.spyOn(tabResources, "loadTabResources")
+		.mockResolvedValue(makeResources({ notesPath: null }));
+	try {
+		vaultStore.setState({
+			vaultPath: "/vault",
+			tree: [],
+			paperFolders: [],
+			treeLoading: true,
+		});
+		setTabs([tab]);
+		hydratePlaceholderTabs([tab.id]);
+		expect(load).not.toHaveBeenCalled();
+
+		vaultStore.setState({ treeLoading: false, paperFolders: [path] });
+		hydratePlaceholderTabs([tab.id]);
+		await vi.waitFor(() => expect(getTabs()[0]?.loaded).toBe(true));
+		expect(load).toHaveBeenCalledExactlyOnceWith(path, "/vault", [], [path]);
+	} finally {
+		vi.restoreAllMocks();
+		vaultStore.setState(previousVault);
+		setTabs(previousTabs);
+	}
 });
 
 describe("insertPlaceholderTab", () => {
