@@ -19,8 +19,7 @@ import {
 	useVaultStore,
 	useWorkspaceStore,
 } from "@/hooks/use-app-stores";
-import { isUnderPapers } from "@/lib/paper";
-import { isLibraryVirtualPath, isTrashVirtualPath } from "@/lib/paper/api";
+import { isLibraryVirtualPath } from "@/lib/paper/api";
 import {
 	openLibraryPaper,
 	rescanLibraryPapers,
@@ -31,7 +30,6 @@ import {
 	setTabHighlights,
 	setTabVisualTraces,
 } from "@/lib/pdf/annotations-store";
-import { isPlazaVirtualPath } from "@/lib/plaza";
 import type { LibraryColumnPref } from "@/lib/settings";
 import { resolveFontFamilyCss } from "@/lib/settings";
 import { patchSettings } from "@/lib/settings/react-store";
@@ -59,7 +57,6 @@ import {
 import { registerDockHandle } from "@/lib/workspace/dock-registry";
 import { evictPdfBuffers, nextPdfLru } from "@/lib/workspace/pdf-retention";
 import {
-	getTabs,
 	setDockLayout,
 	setEditorLru,
 	setPdfLru,
@@ -234,27 +231,7 @@ export function WorkspaceHost() {
 				? [activeTabId]
 				: [];
 		if (!ids.length) return;
-		if (treeLoading) {
-			// While the tree is still loading, a restored paper-folder placeholder
-			// cannot be reliably distinguished from an org folder. Hydrating it now
-			// would flip it to Library and stick (hydration is one-shot). Skip only
-			// directory-like paths under papers; files and virtual tabs can proceed.
-			const hasPaperDirPlaceholder = ids.some((id) => {
-				const tab = getTabs().find((t) => t.id === id);
-				if (!tab || tab.loaded) return false;
-				if (
-					isLibraryVirtualPath(tab.path) ||
-					isTrashVirtualPath(tab.path) ||
-					isPlazaVirtualPath(tab.path)
-				) {
-					return false;
-				}
-				if (!isUnderPapers(tab.path)) return false;
-				return !/\.[^\\/]+$/.test(tab.path);
-			});
-			if (hasPaperDirPlaceholder) return;
-		}
-		rehydrateMisclassifiedPaperTabs();
+		if (!treeLoading) rehydrateMisclassifiedPaperTabs();
 		hydratePlaceholderTabs(ids);
 	}, [activeTabId, visiblePanelIds, treeLoading]);
 
