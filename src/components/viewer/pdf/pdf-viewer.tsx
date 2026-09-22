@@ -584,12 +584,6 @@ function PdfViewerInner({
 		}
 		return next;
 	}, [pageTextLinkMap, citationLinks]);
-	/**
-	 * Mirror of the translate cluster's `translateStreaming`. Created here (not in
-	 * {@link usePdfSelectionTranslate}) because `usePdfCards` is declared first and
-	 * needs the same ref object to keep a streaming translate card alive.
-	 */
-	const translateStreamingRef = useRef(false);
 
 	const hostRef = useRef<HTMLDivElement>(null);
 
@@ -664,14 +658,12 @@ function PdfViewerInner({
 		rePlaceActiveCardOnScroll,
 		markCardHoverEnter,
 		scheduleHoverHide,
-		cardHoverSurfaceRef,
 	} = usePdfCards({
 		hostRef,
 		pageTextMapRef,
 		threadsRef,
 		translatesRef,
 		visualTracesRef,
-		translateStreamingRef,
 		onCardOpen: resetChromeForOpenedCard,
 		onCardClose: resetChromeForClosedCard,
 		stopTranslateSession,
@@ -695,14 +687,10 @@ function PdfViewerInner({
 		translatesRef,
 		setTranslates,
 		upsertTranslate,
-		activeCard,
 		openCard,
 		hideActiveCard,
-		scheduleHoverHide,
-		cardHoverSurfaceRef,
 		activeCardRef,
 		activeSessionRef,
-		translateStreamingRef,
 	});
 	stopTranslateSessionRef.current = stopTranslateSessionImpl;
 	clearTranslateErrorRef.current = clearTranslateError;
@@ -867,11 +855,7 @@ function PdfViewerInner({
 	clearCitationPreviewRef.current = clearCitationPreview;
 	clearCrossrefPreviewRef.current = clearCrossrefPreview;
 
-	const { askPinAnchors, translatePinAnchors } = usePdfPinAnchors({
-		threads,
-		translates,
-		activeCard,
-	});
+	const { askPinAnchors } = usePdfPinAnchors({ threads });
 
 	/**
 	 * Gutter pins per page (1-based). Built once per mark/text change: pin
@@ -884,7 +868,6 @@ function PdfViewerInner({
 				highlights,
 				highlightAnchors,
 				askPinAnchors,
-				translatePinAnchors,
 				visualTraces,
 				pageTextMap,
 				paperTitle,
@@ -893,7 +876,6 @@ function PdfViewerInner({
 			highlights,
 			highlightAnchors,
 			askPinAnchors,
-			translatePinAnchors,
 			visualTraces,
 			pageTextMap,
 			paperTitle,
@@ -1275,10 +1257,25 @@ function PdfViewerInner({
 
 	// ---- In-PDF highlight selection menu ----
 
+	// Scrolling means the reader moved on, so a translate card is dismissed
+	// rather than dragged along. Pointer wander alone must never close it,
+	// which is why the hover timer holds translate cards open.
+	//
+	// Gated on the pin actually moving: scroll events also fire when the
+	// listener is (re)subscribed and from EmbedPDF's selection/layout churn
+	// right after the card opens, and those must not flash the card away.
 	const rePlaceFloatingOnScroll = useCallback(() => {
-		rePlaceActiveCardOnScroll();
+		const pinMoved = rePlaceActiveCardOnScroll();
+		if (pinMoved && activeCard?.kind === "translate") {
+			hideActiveCard();
+		}
 		rePlaceSelectionMenu();
-	}, [rePlaceActiveCardOnScroll, rePlaceSelectionMenu]);
+	}, [
+		activeCard,
+		rePlaceActiveCardOnScroll,
+		rePlaceSelectionMenu,
+		hideActiveCard,
+	]);
 
 	// Boolean only — do not depend on selectionMenu.screen or re-place loops.
 	const selectionMenuOpen = selectionMenu != null;

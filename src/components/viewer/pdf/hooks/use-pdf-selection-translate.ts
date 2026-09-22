@@ -1,9 +1,10 @@
 /**
  * Selection → 翻译 workflow for the EmbedPDF viewer: the one ephemeral mark kind.
- * A translate card is created straight from the selection menu, streams into the
- * open card, and disappears again unless it is hovered — so this cluster owns the
- * whole run lifecycle (`translateStreaming`, its cancel token, its error chrome)
- * plus the record write to `marks/<id>.json`.
+ * A translate card is created straight from the selection menu and streams into
+ * the open card. It never auto-closes — the reader dismisses it explicitly
+ * (hide / delete), so this cluster owns the whole run lifecycle
+ * (`translateStreaming`, its cancel token, its error chrome) plus the record
+ * write to `marks/<id>.json`.
  *
  * Its own hook for the record container and card chrome around one run: the
  * two providers behind the UI contract (an ACP Agent streamed through the
@@ -15,8 +16,8 @@
  * Boundaries:
  * - the persisted array lives in {@link usePdfMarksIo}: setters and the mirror
  *   ref are injected, never re-declared here;
- * - card placement / hover lives in {@link usePdfCards}: this hook only opens,
- *   hides, and re-arms the hover-hide timer for its own card;
+ * - card placement / hover lives in {@link usePdfCards}: this hook only opens
+ *   and hides its own card;
  * - `activeSessionRef` is shared with the ask cluster (at most one PDF agent run
  *   is in flight), so the parent owns it and injects it into both;
  * - the selection menu owns its own teardown, so the parent closes the menu and
@@ -59,25 +60,15 @@ export type UsePdfSelectionTranslateOptions = {
 	translatesRef: RefObject<PdfTranslateRecord[]>;
 	setTranslates: Dispatch<SetStateAction<PdfTranslateRecord[]>>;
 	upsertTranslate: (rec: PdfTranslateRecord) => void;
-	/** Open card, needed as a value: the auto-hide effect re-arms when it changes. */
-	activeCard: ActiveSelectionCard | null;
 	/** Cards cluster; owned by {@link usePdfCards}. */
 	openCard: (card: ActiveSelectionCard) => void;
 	hideActiveCard: () => void;
-	scheduleHoverHide: () => void;
-	cardHoverSurfaceRef: RefObject<boolean>;
 	activeCardRef: RefObject<ActiveSelectionCard | null>;
 	/**
 	 * Single in-flight PDF agent run, shared with the ask cluster. Parent-owned so
 	 * either cluster can cancel the other's session token.
 	 */
 	activeSessionRef: RefObject<string | null>;
-	/**
-	 * Mirror of `translateStreaming`. Created by the parent because
-	 * {@link usePdfCards} is declared first and reads it to keep a streaming
-	 * translate card alive past hover.
-	 */
-	translateStreamingRef: RefObject<boolean>;
 };
 
 export type PdfSelectionTranslate = {
@@ -103,14 +94,10 @@ export function usePdfSelectionTranslate({
 	translatesRef,
 	setTranslates,
 	upsertTranslate,
-	activeCard,
 	openCard,
 	hideActiveCard,
-	scheduleHoverHide,
-	cardHoverSurfaceRef,
 	activeCardRef,
 	activeSessionRef,
-	translateStreamingRef,
 }: UsePdfSelectionTranslateOptions): PdfSelectionTranslate {
 	const { t } = useTranslation("viewer");
 	const [translateStreaming, setTranslateStreaming] = useState(false);
@@ -134,9 +121,8 @@ export function usePdfSelectionTranslate({
 				sessionRef: translateSessionRef,
 				activeSessionRef,
 			});
-			translateStreamingRef.current = false;
 		};
-	}, [activeSessionRef, translateStreamingRef]);
+	}, [activeSessionRef]);
 
 	const stopTranslateSession = useCallback(() => {
 		const sid = translateSessionRef.current;
@@ -145,9 +131,8 @@ export function usePdfSelectionTranslate({
 			if (activeSessionRef.current === sid) activeSessionRef.current = null;
 			translateSessionRef.current = null;
 		}
-		translateStreamingRef.current = false;
 		setTranslateStreaming(false);
-	}, [activeSessionRef, translateStreamingRef]);
+	}, [activeSessionRef]);
 
 	const clearTranslateError = useCallback(() => {
 		setTranslateError(null);
@@ -179,28 +164,11 @@ export function usePdfSelectionTranslate({
 					updatedAt: new Date().toISOString(),
 				});
 			}
-			translateStreamingRef.current = false;
 			setTranslateStreaming(false);
 			setTranslateError(message);
 		},
-		[upsertTranslate, translatesRef, translateStreamingRef],
+		[upsertTranslate, translatesRef],
 	);
-
-	// Translate cards are ephemeral: once streaming ends, auto-hide unless the
-	// pointer is still over the card, pin, or source highlight.
-	const activeTranslateCardId =
-		activeCard?.kind === "translate" ? activeCard.id : null;
-	useEffect(() => {
-		if (!activeTranslateCardId) return;
-		if (translateStreaming) return;
-		if (cardHoverSurfaceRef.current) return;
-		scheduleHoverHide();
-	}, [
-		activeTranslateCardId,
-		translateStreaming,
-		scheduleHoverHide,
-		cardHoverSurfaceRef,
-	]);
 
 	const translateSelection = useCallback(
 		(anchor: PdfAskAnchor) => {
@@ -216,10 +184,7 @@ export function usePdfSelectionTranslate({
 				quote,
 			});
 			upsertTranslate(rec);
-			// Menu action is not a hover surface; card auto-hides after result.
-			cardHoverSurfaceRef.current = false;
 			openCard({ kind: "translate", id: rec.id });
-			translateStreamingRef.current = true;
 			setTranslateStreaming(true);
 			setTranslateError(null);
 
@@ -269,13 +234,11 @@ export function usePdfSelectionTranslate({
 					};
 					upsertTranslate(next);
 					void persistTranslate(next);
-					translateStreamingRef.current = false;
 					setTranslateStreaming(false);
 					setTranslateError(null);
 				},
 				markFailed: (message) => markTranslateFailure(rec.id, message),
 				stopStreaming: () => {
-					translateStreamingRef.current = false;
 					setTranslateStreaming(false);
 				},
 			});
@@ -290,10 +253,8 @@ export function usePdfSelectionTranslate({
 			persistTranslate,
 			markTranslateFailure,
 			openCard,
-			cardHoverSurfaceRef,
 			translatesRef,
 			activeSessionRef,
-			translateStreamingRef,
 		],
 	);
 

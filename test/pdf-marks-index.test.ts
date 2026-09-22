@@ -48,7 +48,6 @@ describe("buildMarksIndex", () => {
 			highlights: [],
 			highlightAnchors: new Map(),
 			askPinAnchors: [],
-			translatePinAnchors: [],
 			visualTraces: [visualTrace({ id: "crop", page: 1, y: 0.4, comment: "" })],
 			pageTextMap: new Map(),
 			paperTitle: undefined,
@@ -63,7 +62,6 @@ describe("buildMarksIndex", () => {
 			highlights: [],
 			highlightAnchors: new Map(),
 			askPinAnchors: [],
-			translatePinAnchors: [],
 			visualTraces: [visualTrace({ id: "v1", page: 1, y: 0.4 })],
 			pageTextMap: new Map(),
 			paperTitle: undefined,
@@ -79,7 +77,6 @@ describe("buildMarksIndex", () => {
 			highlights: [],
 			highlightAnchors: new Map(),
 			askPinAnchors: [],
-			translatePinAnchors: [],
 			visualTraces: [
 				visualTrace({ id: "v1", page: 1, y: 0.4, hasAgent: true }),
 			],
@@ -99,7 +96,6 @@ describe("buildMarksIndex", () => {
 			highlights: [],
 			highlightAnchors: new Map(),
 			askPinAnchors: [],
-			translatePinAnchors: [],
 			visualTraces: [
 				visualTrace({
 					id: "v1",
@@ -123,7 +119,6 @@ describe("buildMarksIndex", () => {
 			highlights: [],
 			highlightAnchors: new Map(),
 			askPinAnchors: [],
-			translatePinAnchors: [],
 			visualTraces: [
 				visualTrace({ id: "v1", page: 1, y: 0.4, hasAgent: true }),
 			],

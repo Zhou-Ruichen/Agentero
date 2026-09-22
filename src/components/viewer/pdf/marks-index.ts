@@ -7,10 +7,7 @@
  * scroll frame.
  */
 
-import type {
-	AskPinAnchor,
-	TranslatePinAnchor,
-} from "@/components/viewer/pdf/hooks/use-pdf-pin-anchors";
+import type { AskPinAnchor } from "@/components/viewer/pdf/hooks/use-pdf-pin-anchors";
 import type { PageAnnotationComment } from "@/components/viewer/pdf/types";
 import type { PdfVisualSessionTrace } from "@/lib/pdf/agent-trace";
 import { tracePreview } from "@/lib/pdf/agent-trace";
@@ -36,7 +33,6 @@ export type MarksIndexInput = {
 	/** Annotation id → normalized rect, for gutter-pin placement. */
 	highlightAnchors: ReadonlyMap<string, NormalizedRect>;
 	askPinAnchors: AskPinAnchor[];
-	translatePinAnchors: TranslatePinAnchor[];
 	visualTraces: PdfVisualSessionTrace[];
 	/** 0-based page index → normalized text rects (missing while unloaded). */
 	pageTextMap: ReadonlyMap<number, NormalizedRect[]>;
@@ -55,7 +51,6 @@ export function buildMarksIndex({
 	highlights,
 	highlightAnchors,
 	askPinAnchors,
-	translatePinAnchors,
 	visualTraces,
 	pageTextMap,
 	paperTitle,
@@ -102,20 +97,6 @@ export function buildMarksIndex({
 			y: pin.y,
 			preview: anchor.preview,
 			ended: anchor.ended,
-			overText: pinObscuresBodyText(pin, pageText),
-			side: pin.side,
-		});
-	}
-	for (const anchor of translatePinAnchors) {
-		if (anchor.hasError) continue;
-		const pageText = pageTextMap.get(anchor.page - 1);
-		const pin = pinFromRects(anchor.rects, pageText);
-		add(anchor.page, {
-			id: anchor.id,
-			kind: "translate",
-			x: pin.x,
-			y: pin.y,
-			preview: anchor.preview,
 			overText: pinObscuresBodyText(pin, pageText),
 			side: pin.side,
 		});

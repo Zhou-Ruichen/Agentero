@@ -194,7 +194,8 @@ type SelectionCardProps = {
 	bodyScroll?: boolean;
 	preferRight?: boolean;
 	title: string;
-	icon: LucideIcon;
+	/** Optional header glyph; omit for a title-only header. */
+	icon?: LucideIcon;
 	/** Header trailing icon buttons (close / hide / delete …). */
 	actions?: SelectionCardAction[];
 	/** Accessible name; defaults to title. */
@@ -311,7 +312,12 @@ export function SelectionCard({
 			onPointerLeave={handlePointerLeave}
 		>
 			<header className="flex shrink-0 items-center gap-2 border-border/60 border-b px-3 py-2">
-				<Icon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+				{Icon ? (
+					<Icon
+						className="size-3.5 shrink-0 text-muted-foreground"
+						aria-hidden
+					/>
+				) : null}
 				<span className="min-w-0 flex-1 truncate font-medium text-foreground text-sm">
 					{title}
 				</span>

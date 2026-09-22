@@ -1,9 +1,5 @@
-import {
-	Languages,
-	MessageSquare,
-	MessageSquareText,
-	ScanSearch,
-} from "lucide-react";
+import type { LucideIcon } from "lucide-react";
+import { MessageSquare, MessageSquareText, ScanSearch } from "lucide-react";
 import { memo } from "react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/core/utils";
@@ -79,14 +75,19 @@ function layoutPins(
 	}));
 }
 
-function pinIcon(kind: SelectionPin["kind"]) {
+/**
+ * Header glyph per pin kind. `SelectionOverlayKind` still lists translate, but
+ * no translate pin is produced any more — the translation is read in its card
+ * and leaves no breadcrumb on the page — so that case stays icon-less.
+ */
+function pinIcon(kind: SelectionPin["kind"]): LucideIcon | null {
 	switch (kind) {
 		case "ask":
 			return MessageSquare;
 		case "annotate":
 			return MessageSquareText;
 		case "translate":
-			return Languages;
+			return null;
 		case "visual":
 		case "agent-trace":
 			return ScanSearch;
@@ -184,7 +185,7 @@ export const SelectionGutter = memo(function SelectionGutter({
 								onOpen(item);
 							}}
 						>
-							<Icon className="size-3.5" strokeWidth={2} />
+							{Icon ? <Icon className="size-3.5" strokeWidth={2} /> : null}
 						</button>
 					</div>
 				);
