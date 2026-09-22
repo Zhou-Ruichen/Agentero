@@ -3,7 +3,7 @@ export type LayoutPresetMode = "agent" | "notes" | "reading";
 
 /** Fraction of the source + Agent area occupied by the Agent rail. */
 export const LAYOUT_MODE_RIGHT_RATIOS: Record<LayoutPresetMode, number> = {
-	agent: 1 / 2,
+	agent: 1 / 3,
 	notes: 0,
 	reading: 0,
 };

@@ -8,8 +8,8 @@ import {
 } from "@/lib/shell/layout-presets";
 
 describe("layout presets", () => {
-	it("allocates Agent half of the reading area in Agent mode", () => {
-		expect(layoutModeRightRatio("agent")).toBe(0.5);
+	it("allocates Agent one third of the reading area in Agent mode", () => {
+		expect(layoutModeRightRatio("agent")).toBeCloseTo(1 / 3);
 	});
 
 	it("collapses Agent in Notes mode", () => {
