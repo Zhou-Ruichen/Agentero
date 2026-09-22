@@ -31,6 +31,11 @@ export type AgentPanelRefs = {
 	activeTabRef: RefObject<string>;
 	selectedAgentIdRef: RefObject<string | null>;
 	switchingRef: RefObject<boolean>;
+	/**
+	 * Submitting flag mirror for synchronous guards in event callbacks.
+	 * Write only through the panel's `setSubmittingFlag` so ref + render
+	 * state stay in lockstep.
+	 */
 	submittingRef: RefObject<boolean>;
 	submissionGenRef: RefObject<number>;
 	sessionContextGenRef: RefObject<number>;
@@ -43,7 +48,6 @@ export type AgentPanelRefs = {
 	thinkParsersRef: RefObject<Map<string, ThinkTagParser>>;
 	sessionHistoryRef: RefObject<ChatSessionHistoryItem[]>;
 	vaultPathRef: RefObject<string | null>;
-	previousVaultPathRef: RefObject<string | null>;
 	promptHistoryIndexRef: RefObject<number | null>;
 	promptHistoryDraftRef: RefObject<string>;
 	promptHistoryAppliedRef: RefObject<string | null>;
@@ -150,7 +154,6 @@ export function useAgentPanelContext({
 	const thinkParsersRef = useRef(new Map<string, ThinkTagParser>());
 	const sessionHistoryRef = useRef<ChatSessionHistoryItem[]>([]);
 	const vaultPathRef = useRef(vaultPath);
-	const previousVaultPathRef = useRef(vaultPath);
 	/**
 	 * ↑/↓ prompt history: index into chronological user prompts, or null when
 	 * not browsing. Draft is restored when stepping past the newest entry.
@@ -176,7 +179,6 @@ export function useAgentPanelContext({
 		thinkParsersRef,
 		sessionHistoryRef,
 		vaultPathRef,
-		previousVaultPathRef,
 		promptHistoryIndexRef,
 		promptHistoryDraftRef,
 		promptHistoryAppliedRef,

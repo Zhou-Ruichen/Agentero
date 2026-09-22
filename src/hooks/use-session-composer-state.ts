@@ -44,12 +44,28 @@ function browserStorage(): Storage | null {
 	}
 }
 
+/** Live composer state plus the session-scoped persistence API around it. */
+export type SessionComposerStateApi = AgentComposerState & {
+	activateSession: (sessionId: string) => void;
+	completeSubmission: (
+		sessionId: string,
+		submitted: AgentComposerState,
+	) => void;
+	migrateSession: (sessionId: string) => void;
+	resetSession: (sessionId: string) => void;
+	setIncludeSelectedFile: Dispatch<SetStateAction<boolean>>;
+	setMentionedPaths: Dispatch<SetStateAction<string[]>>;
+	setSelectedSkillIds: Dispatch<SetStateAction<string[]>>;
+	setText: Dispatch<SetStateAction<string>>;
+	snapshot: () => AgentComposerState;
+};
+
 export function useSessionComposerState({
 	vaultPath,
 	agentId,
 	sessionId,
 	defaultIncludeSelectedFile,
-}: SessionComposerStateOptions) {
+}: SessionComposerStateOptions): SessionComposerStateApi {
 	const scopeKey = composerScopeKey(vaultPath, agentId);
 	const defaultIncludeSelectedFileRef = useRef(defaultIncludeSelectedFile);
 	defaultIncludeSelectedFileRef.current = defaultIncludeSelectedFile;

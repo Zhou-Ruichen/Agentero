@@ -3,6 +3,11 @@
  * runOnce, visual-trace / ask-thread binding, deferred-event replay), the
  * follow-up waitlist + drain, external turns from the PDF pin modal, and
  * cancel / tool-ask answer paths.
+ *
+ * The turn flow is split into named phases (resolve agent → resume target →
+ * prompt assembly → run → bind artifacts → commit history → replay events);
+ * store-derived values (transcript, history, active tab) are read straight
+ * from the agent session store instead of being mirrored through props.
  */
 import {
 	type Dispatch,
@@ -16,15 +21,13 @@ import type {
 	AgentPanelRefs,
 	AgentPanelT,
 } from "@/components/agent/hooks/use-agent-panel-context";
+import type { AgentSessionRuntime } from "@/components/agent/hooks/use-agent-session-runtime";
 import type { QueuedPrompt } from "@/components/agent/types";
+import type { SessionComposerStateApi } from "@/hooks/use-session-composer-state";
 import { formatLocaleTimestamp } from "@/i18n";
 import {
 	type AgentListResponse,
 	type AgentModeChoice,
-	type AgentPlanEvent,
-	type AgentResultPayload,
-	type AgentStreamEvent,
-	type AgentToolEvent,
 	cancelAgentRun,
 	ensureCatalogAgent,
 	loadModelPref,
@@ -33,9 +36,10 @@ import {
 	runOnce,
 } from "@/lib/agent";
 import {
-	type AgentSessionRecord,
 	type AgentTurnRequest,
 	agentSessionStore,
+	isActiveTabRunning,
+	useAgentSessionStore,
 } from "@/lib/agent/agent-session-store";
 import {
 	type AgentOption,
@@ -44,7 +48,8 @@ import {
 	type ChatSessionHistoryItem,
 	errorChatLine,
 	errorText,
-	type ToolAskUserRequest,
+	type PendingSessionEvent,
+	type PendingTerminalEvent,
 	upsertChatSessionTurn,
 } from "@/lib/agent/chat-state";
 import {
@@ -112,6 +117,20 @@ export type SendOptions = {
 	modelId?: string;
 };
 
+/** Request-shaping context for a turn: agent / model / effort / fast selection. */
+export type AgentTurnConfig = {
+	selected: AgentOption | undefined;
+	registry: AgentListResponse | null;
+	refresh: () => Promise<void>;
+	modelId: string | null;
+	collaborationModeId: string | null;
+	collaborationOptions: AgentModeChoice[];
+	reasoningEffort: string | null;
+	fastAvailable: boolean;
+	fastEnabled: boolean;
+	acpCommandsByAgent: Record<string, AcpCommand[]>;
+};
+
 export type UseAgentSendOptions = {
 	refs: Pick<
 		AgentPanelRefs,
@@ -135,49 +154,21 @@ export type UseAgentSendOptions = {
 	t: AgentPanelT;
 	i18nLanguage: string;
 	vaultPath: string | null;
+	/** Render-time transcript snapshot used as the base for the next turn. */
 	lines: ChatLine[];
-	setLines: (update: ChatLine[] | ((prev: ChatLine[]) => ChatLine[])) => void;
-	setSessionHistory: (
-		update:
-			| AgentSessionRecord[]
-			| ((prev: AgentSessionRecord[]) => AgentSessionRecord[]),
-	) => void;
-	setActiveTabId: (id: string) => void;
-	activeTabId: string;
-	activeTabIsRunning: boolean;
 	submitting: boolean;
 	switching: boolean;
-	setSubmitting: Dispatch<SetStateAction<boolean>>;
-	setStoreSubmitting: (v: boolean) => void;
+	/** Sole writer for the submitting flag (ref + render state in lockstep). */
+	setSubmittingFlag: (value: boolean) => void;
 	setHistoryOpen: Dispatch<SetStateAction<boolean>>;
 	setSelectedAgentId: Dispatch<SetStateAction<string | null>>;
-	selected: AgentOption | undefined;
-	registry: AgentListResponse | null;
-	refresh: () => Promise<void>;
-	modelId: string | null;
-	collaborationModeId: string | null;
-	collaborationOptions: AgentModeChoice[];
-	reasoningEffort: string | null;
-	fastAvailable: boolean;
-	fastEnabled: boolean;
-	acpCommandsByAgent: Record<string, AcpCommand[]>;
-	contextPaths: string[];
 	selectedVaultPath: string | null;
-	snapshotComposerState: () => AgentComposerState;
-	completeComposerSubmission: (
-		sessionId: string,
-		submitted: AgentComposerState,
-	) => void;
-	setComposerText: Dispatch<SetStateAction<string>>;
-	setMentionedPaths: Dispatch<SetStateAction<string[]>>;
-	setSelectedSkillIds: Dispatch<SetStateAction<string[]>>;
-	activateComposerSession: (sessionId: string) => void;
-	applyStreamEvent: (ev: AgentStreamEvent) => void;
-	applyToolEvent: (ev: AgentToolEvent) => void;
-	applyPlanEvent: (ev: AgentPlanEvent) => void;
-	completeSession: (ev: AgentResultPayload) => void;
-	failSession: (sessionId: string, error: string) => void;
-	setToolAskUserRequest: Dispatch<SetStateAction<ToolAskUserRequest | null>>;
+	contextPaths: string[];
+	/** Live composer state plus the session-scoped persistence API. */
+	composer: SessionComposerStateApi;
+	turnConfig: AgentTurnConfig;
+	/** Session runtime event appliers + completion handlers. */
+	runtime: AgentSessionRuntime;
 };
 
 export type AgentSend = {
@@ -217,57 +208,390 @@ export function useAgentSend({
 	i18nLanguage,
 	vaultPath,
 	lines,
-	setLines,
-	setSessionHistory,
-	setActiveTabId,
-	activeTabId,
-	activeTabIsRunning,
 	submitting,
 	switching,
-	setSubmitting,
-	setStoreSubmitting,
+	setSubmittingFlag,
 	setHistoryOpen,
 	setSelectedAgentId,
-	selected,
-	registry,
-	refresh,
-	modelId,
-	collaborationModeId,
-	collaborationOptions,
-	reasoningEffort,
-	fastAvailable,
-	fastEnabled,
-	acpCommandsByAgent,
-	contextPaths,
 	selectedVaultPath,
-	snapshotComposerState,
-	completeComposerSubmission,
-	setComposerText,
-	setMentionedPaths,
-	setSelectedSkillIds,
-	activateComposerSession,
-	applyStreamEvent,
-	applyToolEvent,
-	applyPlanEvent,
-	completeSession,
-	failSession,
-	setToolAskUserRequest,
+	contextPaths,
+	composer: {
+		snapshot: snapshotComposerState,
+		completeSubmission: completeComposerSubmission,
+		setText: setComposerText,
+		setMentionedPaths,
+		setSelectedSkillIds,
+		activateSession: activateComposerSession,
+	},
+	turnConfig: {
+		selected,
+		registry,
+		refresh,
+		modelId,
+		collaborationModeId,
+		collaborationOptions,
+		reasoningEffort,
+		fastAvailable,
+		fastEnabled,
+		acpCommandsByAgent,
+	},
+	runtime: {
+		applyStreamEvent,
+		applyToolEvent,
+		applyPlanEvent,
+		completeSession,
+		failSession,
+		setToolAskUserRequest,
+	},
 }: UseAgentSendOptions): AgentSend {
+	// Store-direct values (single source of truth for the transcript).
+	const setLines = useAgentSessionStore((s) => s.setLines);
+	const setSessionHistory = useAgentSessionStore((s) => s.setSessions);
+	const setActiveTabId = useAgentSessionStore((s) => s.setActiveTabId);
+	const activeTabId = useAgentSessionStore((s) => s.activeTabId);
+	const activeTabIsRunning = useAgentSessionStore(isActiveTabRunning);
+
 	/** Follow-ups typed while the active session is still running. */
 	const [messageQueue, setMessageQueue] = useState<QueuedPrompt[]>([]);
 	/** Prevents overlapping drain of the follow-up waitlist. */
 	const drainInFlightRef = useRef(false);
-	const messageQueueRef = useRef<QueuedPrompt[]>([]);
-
-	useEffect(() => {
-		messageQueueRef.current = messageQueue;
-	}, [messageQueue]);
 
 	const clearMessageQueue = useCallback(() => {
-		messageQueueRef.current = [];
 		setMessageQueue([]);
 		drainInFlightRef.current = false;
 	}, []);
+
+	// ---- Turn phases (closures over the options above) ---------------------
+
+	/**
+	 * Resolve the agent a turn runs on and its model prefs:
+	 * explicit option → continuing session's agent → switcher → default →
+	 * catalog fallback. Prevents pin-modal continue from loading a Codex
+	 * session with Grok (pdfAsk default). forceNewSession (Cmd+Enter new
+	 * pin) never inherits the open panel agent. Returns null after writing
+	 * an error line.
+	 */
+	const resolveTurnAgentAndModel = async (
+		options: SendOptions | undefined,
+		forceNewSession: boolean,
+	): Promise<{
+		agentId: string;
+		modelId: string | undefined;
+		preferredEffort: string | null;
+	} | null> => {
+		const activeHistoryForAgent = forceNewSession
+			? undefined
+			: sessionHistoryRef.current.find(
+					(item) => item.id === activeTabRef.current,
+				);
+		let agentId =
+			options?.agentId?.trim() ||
+			(activeHistoryForAgent?.providerSessionId && activeHistoryForAgent.agentId
+				? activeHistoryForAgent.agentId
+				: null) ||
+			selected?.id ||
+			registry?.defaultId ||
+			null;
+		if (!agentId && selected?.templateId) {
+			try {
+				const agent = await ensureCatalogAgent(selected.templateId, true);
+				agentId = agent.id;
+				setSelectedAgentId(agentId);
+				await refresh();
+			} catch (e) {
+				setLines((p) => [...p, errorChatLine(errorText(e))]);
+				return null;
+			}
+		}
+
+		if (!agentId) {
+			setLines((p) => [
+				...p,
+				{
+					id: nextLineId("sys"),
+					kind: "system",
+					text: t("messages.noAgent"),
+				},
+			]);
+			return null;
+		}
+		// Keep switcher/ref in sync when the turn forces another agent.
+		if (agentId !== selectedAgentIdRef.current) {
+			selectedAgentIdRef.current = agentId;
+			setSelectedAgentId(agentId);
+		}
+		return {
+			agentId,
+			modelId:
+				options?.modelId?.trim() ||
+				(agentId === selected?.id ? modelId : null) ||
+				loadModelPref(agentId) ||
+				undefined,
+			preferredEffort: loadReasoningEffortPref(agentId),
+		};
+	};
+
+	/**
+	 * Where this turn continues (read-only): the continuing history row (if
+	 * any), the durable provider session id to resume (host picks
+	 * session/resume vs session/load from agent capabilities, e.g. Grok:
+	 * load), and the transcript to build on. The caller drops the panel's
+	 * continue target first when forceNewSession is set.
+	 */
+	const resolveResumeTarget = (
+		options: SendOptions | undefined,
+		forceNewSession: boolean,
+	): {
+		activeHistory: ChatSessionHistoryItem | undefined;
+		providerContinueId: string | null;
+		resumeAllowed: boolean;
+		priorLines: ChatLine[];
+	} => {
+		const activeHistory = forceNewSession
+			? undefined
+			: sessionHistoryRef.current.find(
+					(item) => item.id === activeTabRef.current,
+				);
+		const providerContinueId = forceNewSession
+			? null
+			: activeConversationRef.current?.trim() ||
+				activeHistory?.providerSessionId?.trim() ||
+				null;
+		const resumeAllowed =
+			Boolean(providerContinueId) && activeHistory?.resumeable !== false;
+		// Prefer explicit baseLines (external turn handler) — React `lines`
+		// can still be the previous panel session when setLines([]) has not
+		// flushed (Cmd+Enter inheritance bug).
+		const priorLines = forceNewSession
+			? (options?.baseLines ?? [])
+			: (options?.baseLines ?? lines);
+		return { activeHistory, providerContinueId, resumeAllowed, priorLines };
+	};
+
+	/**
+	 * Scratch full text for @-mentioned plaza papers: the host downloads +
+	 * converts them outside the vault so the agent never imports papers
+	 * just to read them. Best-effort; falls back to abstract-only context.
+	 */
+	const preparePlazaScratchFor = async (
+		resolvedContextPaths: string[],
+		isAcpCommand: boolean,
+	): Promise<Map<string, string>> => {
+		const plazaContextPaths = resolvedContextPaths.filter((path) =>
+			isPlazaMentionPath(path),
+		);
+		if (plazaContextPaths.length === 0 || isAcpCommand) {
+			return new Map<string, string>();
+		}
+		return preparePlazaScratch(plazaContextPaths);
+	};
+
+	/**
+	 * Workflow suggestions act on the focused paper / mentioned paths so
+	 * “Summarize” targets the open paper even without an explicit @mention.
+	 * Plaza mentions are virtual refs, never workflow filesystem targets.
+	 */
+	const resolveWorkflowTarget = (
+		resolvedContextPaths: string[],
+		workflow: string | undefined,
+	): string | undefined => {
+		const workflowVaultTarget = resolvedContextPaths.find(
+			(path) => !isPlazaMentionPath(path),
+		);
+		return workflow
+			? (workflowVaultTarget ?? selectedVaultPath ?? undefined)
+			: workflowVaultTarget;
+	};
+
+	/** Assemble and dispatch the runOnce request for a resolved turn. */
+	const startTurn = (turn: {
+		agentId: string;
+		resumeSessionId: string | undefined;
+		prompt: string;
+		isAcpCommand: boolean;
+		images: PromptImage[] | undefined;
+		workflow: string | undefined;
+		workflowTarget: string | undefined;
+		modelId: string | undefined;
+		preferredEffort: string | null;
+		skillIds: string[];
+	}) =>
+		runOnce({
+			agentId: turn.agentId,
+			sessionId: turn.resumeSessionId,
+			prompt: turn.prompt,
+			isAcpCommand: turn.isAcpCommand,
+			images: turn.images,
+			vaultPath: vaultPath ?? undefined,
+			workflow: turn.workflow ?? "free",
+			target: turn.workflowTarget,
+			modelId: turn.modelId,
+			collaborationModeId:
+				collaborationModeId &&
+				collaborationOptions.some((mode) => mode.id === collaborationModeId)
+					? collaborationModeId
+					: undefined,
+			reasoningEffort:
+				turn.preferredEffort === null
+					? undefined
+					: turn.agentId === selected?.id
+						? (reasoningEffort ?? turn.preferredEffort)
+						: turn.preferredEffort,
+			preferHighestReasoningEffort: turn.preferredEffort === null,
+			fastMode: fastAvailable ? fastEnabled : undefined,
+			skillIds: turn.skillIds,
+			permissionMode: loadSettings().agentPermissionMode,
+		});
+
+	/**
+	 * Pin-binding fields for the turn: without new visual drafts the turn
+	 * continues the pin bound to the history row / options; with drafts the
+	 * first draft's pin wins for the new history entry.
+	 */
+	const visualTraceBinding = (
+		activeHistory: ChatSessionHistoryItem | undefined,
+		options: SendOptions | undefined,
+		resolvedVisualDrafts: PdfVisualDraft[],
+	): {
+		continueVisualTraceId: string | undefined;
+		continuePaperAbs: string | undefined;
+		boundVisualTraceId: string | undefined;
+		boundPaperAbs: string | undefined;
+	} => {
+		const historyVisualTraceId =
+			activeHistory && "visualTraceId" in activeHistory
+				? (activeHistory as { visualTraceId?: string }).visualTraceId
+				: undefined;
+		const historyPaperAbs =
+			activeHistory && "paperAbsPath" in activeHistory
+				? (activeHistory as { paperAbsPath?: string }).paperAbsPath
+				: undefined;
+		const continuesPin = resolvedVisualDrafts.length === 0;
+		return {
+			continueVisualTraceId: continuesPin
+				? options?.visualTraceId?.trim() ||
+					historyVisualTraceId?.trim() ||
+					undefined
+				: undefined,
+			continuePaperAbs: continuesPin
+				? options?.paperAbsPath?.trim() || historyPaperAbs?.trim() || undefined
+				: undefined,
+			boundVisualTraceId:
+				options?.visualTraceId?.trim() ||
+				historyVisualTraceId ||
+				resolvedVisualDrafts[0]?.id,
+			boundPaperAbs:
+				options?.paperAbsPath?.trim() ||
+				historyPaperAbs ||
+				resolvedVisualDrafts[0]?.paperAbsPath,
+		};
+	};
+
+	/**
+	 * Publish the accepted turn across the panel: agent placeholder line,
+	 * composer session handoff, active-tab switch, and history upsert
+	 * (dropping superseded visual-trace placeholders before the provider-id
+	 * based conversation merge).
+	 */
+	const publishAcceptedTurn = (turn: {
+		sessionId: string;
+		agentId: string;
+		activeHistory: ChatSessionHistoryItem | undefined;
+		historyTitle: string | undefined;
+		binding: ReturnType<typeof visualTraceBinding>;
+		sessionStartLines: ChatLine[];
+		submittedComposerState: AgentComposerState;
+	}) => {
+		const agentLine: ChatLine = {
+			id: nextLineId("agent"),
+			kind: "agent",
+			parts: [],
+			streaming: true,
+		};
+		// Clone so history entry and active view never share array/object identity
+		// (prevents cross-session stream updates mutating the wrong transcript).
+		const pendingLines: ChatLine[] = [...turn.sessionStartLines, agentLine];
+		const historyLines: ChatLine[] = pendingLines.map((line) => {
+			if (line.kind === "agent") {
+				return { ...line, parts: [...line.parts] };
+			}
+			return { ...line };
+		});
+		completeComposerSubmission(turn.sessionId, turn.submittedComposerState);
+		// Runtime session id is the stream correlation key; durable continue
+		// uses providerSessionId set on agent:completed (via session/load|resume).
+		activeTabRef.current = turn.sessionId;
+		setActiveTabId(turn.sessionId);
+		knownSessionIdsRef.current.add(turn.sessionId);
+		const nextHistoryItem: ChatSessionHistoryItem = {
+			id: turn.sessionId,
+			agentId: turn.agentId,
+			source: "local",
+			title: turn.activeHistory?.title || turn.historyTitle || t("defaultName"),
+			agentName: selected?.name ?? t("defaultName"),
+			startedAt:
+				turn.activeHistory?.startedAt ||
+				formatLocaleTimestamp(new Date(), i18nLanguage),
+			lines: historyLines,
+			status: "running",
+			// Carry over pin session provider id until completed event.
+			providerSessionId: turn.activeHistory?.providerSessionId ?? null,
+			resumeable: true,
+			...(turn.binding.boundVisualTraceId
+				? { visualTraceId: turn.binding.boundVisualTraceId }
+				: {}),
+			...(turn.binding.boundPaperAbs
+				? { paperAbsPath: turn.binding.boundPaperAbs }
+				: {}),
+		};
+		setSessionHistory((prev) =>
+			upsertChatSessionTurn(
+				prev.filter(
+					(item) =>
+						!(
+							turn.activeHistory &&
+							isVisualTraceHistoryId(turn.activeHistory.id) &&
+							item.id === turn.activeHistory.id
+						) &&
+						!(
+							turn.binding.boundVisualTraceId &&
+							"visualTraceId" in item &&
+							(item as { visualTraceId?: string }).visualTraceId ===
+								turn.binding.boundVisualTraceId &&
+							item.id !== turn.sessionId
+						),
+				),
+				nextHistoryItem,
+				turn.activeHistory,
+			),
+		);
+		setLines(pendingLines);
+	};
+
+	/** Replay events the runtime parked while the submission was in flight. */
+	const replayDeferredEvents = (
+		sessionId: string,
+		pendingSessionEvents: PendingSessionEvent[],
+		pendingTerminal: PendingTerminalEvent | undefined,
+	): boolean => {
+		for (const pendingEvent of pendingSessionEvents) {
+			if (pendingEvent.kind === "stream") {
+				applyStreamEvent(pendingEvent.event);
+			} else if (pendingEvent.kind === "tool") {
+				applyToolEvent(pendingEvent.event);
+			} else {
+				applyPlanEvent(pendingEvent.event);
+			}
+		}
+		if (pendingTerminal?.kind === "completed") {
+			completeSession(pendingTerminal.event);
+		} else if (pendingTerminal?.kind === "failed") {
+			failSession(sessionId, pendingTerminal.error);
+		}
+		return pendingTerminal?.kind !== "failed";
+	};
+
+	// ---- send --------------------------------------------------------------
 
 	const send = async (
 		textRaw: string,
@@ -316,109 +640,31 @@ export function useAgentSend({
 		const submissionGeneration = ++submissionGenRef.current;
 		const sessionContextGeneration = sessionContextGenRef.current;
 		const requestVaultPath = vaultPath;
-		submittingRef.current = true;
-		setSubmitting(true);
-		setStoreSubmitting(true);
+		setSubmittingFlag(true);
 		try {
 			if (!isTauri()) {
 				setLines((p) => [...p, errorChatLine(t("messages.desktopOnly"))]);
 				return false;
 			}
 
-			const forceNewSessionEarly = options?.forceNewSession === true;
-			const activeHistoryForAgent = forceNewSessionEarly
-				? undefined
-				: sessionHistoryRef.current.find(
-						(item) => item.id === activeTabRef.current,
-					);
-			// Priority: explicit option → continuing session's agent → switcher → default.
-			// Prevents pin-modal continue from loading Codex session with Grok (pdfAsk default).
-			// forceNewSession (Cmd+Enter new pin) never inherits the open panel agent.
-			let agentId =
-				options?.agentId?.trim() ||
-				(activeHistoryForAgent?.providerSessionId &&
-				activeHistoryForAgent.agentId
-					? activeHistoryForAgent.agentId
-					: null) ||
-				selected?.id ||
-				registry?.defaultId ||
-				null;
-			if (!agentId && selected?.templateId) {
-				try {
-					const agent = await ensureCatalogAgent(selected.templateId, true);
-					agentId = agent.id;
-					setSelectedAgentId(agentId);
-					await refresh();
-				} catch (e) {
-					setLines((p) => [...p, errorChatLine(errorText(e))]);
-					return false;
-				}
-			}
-
-			if (!agentId) {
-				setLines((p) => [
-					...p,
-					{
-						id: nextLineId("sys"),
-						kind: "system",
-						text: t("messages.noAgent"),
-					},
-				]);
-				return false;
-			}
-			// Keep switcher/ref in sync when the turn forces another agent.
-			if (agentId !== selectedAgentIdRef.current) {
-				selectedAgentIdRef.current = agentId;
-				setSelectedAgentId(agentId);
-			}
-			const resolvedModelId =
-				options?.modelId?.trim() ||
-				(agentId === selected?.id ? modelId : null) ||
-				loadModelPref(agentId) ||
-				undefined;
-			const preferredEffort = loadReasoningEffortPref(agentId);
-
+			const forceNewSession = options?.forceNewSession === true;
+			const agent = await resolveTurnAgentAndModel(options, forceNewSession);
+			if (!agent) return false;
 			// Options are availability-filtered in buildOptions; unavailable agents
 			// never appear in the switcher.
-			const isAcpCommand = (acpCommandsByAgent[agentId] ?? []).some(
+			const isAcpCommand = (acpCommandsByAgent[agent.agentId] ?? []).some(
 				(command) =>
 					text === `/${command.name}` || text.startsWith(`/${command.name} `),
 			);
-			if (forceNewSessionEarly) {
+			if (forceNewSession) {
 				// Drop any panel-level continue target before resolving resume.
 				activeConversationRef.current = null;
 			}
-			const activeHistory = forceNewSessionEarly
-				? undefined
-				: sessionHistoryRef.current.find(
-						(item) => item.id === activeTabRef.current,
-					);
-			// Continue when we have a durable provider session id. Host picks
-			// session/resume vs session/load from agent capabilities (Grok: load).
-			const providerContinueId = forceNewSessionEarly
-				? null
-				: activeConversationRef.current?.trim() ||
-					activeHistory?.providerSessionId?.trim() ||
-					null;
-			const resumeAllowed =
-				Boolean(providerContinueId) && activeHistory?.resumeable !== false;
-			// Prefer explicit baseLines (external turn handler) — React `lines`
-			// can still be the previous panel session when setLines([]) has not
-			// flushed (Cmd+Enter inheritance bug).
-			const priorLines = forceNewSessionEarly
-				? (options?.baseLines ?? [])
-				: (options?.baseLines ?? lines);
-			// Scratch full text for @-mentioned plaza papers: the host downloads +
-			// converts them outside the vault so the agent never imports papers
-			// just to read them. Best-effort with a timeout; falls back to
-			// abstract-only context.
-			const plazaContextPaths = resolvedContextPaths.filter((path) =>
-				isPlazaMentionPath(path),
+			const target = resolveResumeTarget(options, forceNewSession);
+			const plazaScratchByPath = await preparePlazaScratchFor(
+				resolvedContextPaths,
+				isAcpCommand,
 			);
-			const plazaScratchByPath =
-				plazaContextPaths.length > 0 && !isAcpCommand
-					? await preparePlazaScratch(plazaContextPaths)
-					: new Map<string, string>();
 			const { prompt, images, visualAnnotations, historyTitle } =
 				assembleTurnPrompt({
 					text,
@@ -430,16 +676,7 @@ export function useAgentSend({
 					plazaScratchByPath,
 					t,
 				});
-			// Workflow suggestions act on the focused paper / mentioned paths so
-			// “Summarize” targets the open paper even without an explicit @mention.
-			// Plaza mentions are virtual refs, never workflow filesystem targets.
 			const workflow = isAcpCommand ? undefined : options?.workflow;
-			const workflowVaultTarget = resolvedContextPaths.find(
-				(path) => !isPlazaMentionPath(path),
-			);
-			const workflowTarget = workflow
-				? (workflowVaultTarget ?? selectedVaultPath ?? undefined)
-				: workflowVaultTarget;
 			const userLine: ChatLine = {
 				id: nextLineId("user"),
 				kind: "user",
@@ -454,40 +691,25 @@ export function useAgentSend({
 					: {}),
 				...(attachedImages.length ? { images: attachedImages } : {}),
 			};
-			const sessionStartLines = [...priorLines, userLine];
+			const sessionStartLines = [...target.priorLines, userLine];
 			setLines(sessionStartLines);
-			const resumeSessionId = resumeAllowed
-				? (providerContinueId ?? undefined)
-				: undefined;
 			// Terminal/stream events are correlated by the fresh Agentero runtime
 			// id, not the provider id used to resume ACP. Keep this empty until the
 			// host accepts the request, then bind it to accepted.sessionId below.
 			pendingSubmissionSessionIdRef.current = null;
-			const accepted = await runOnce({
-				agentId,
-				sessionId: resumeSessionId,
+			const accepted = await startTurn({
+				agentId: agent.agentId,
+				resumeSessionId: target.resumeAllowed
+					? (target.providerContinueId ?? undefined)
+					: undefined,
 				prompt,
 				isAcpCommand,
 				images,
-				vaultPath: vaultPath ?? undefined,
-				workflow: workflow ?? "free",
-				target: workflowTarget,
-				modelId: resolvedModelId,
-				collaborationModeId:
-					collaborationModeId &&
-					collaborationOptions.some((mode) => mode.id === collaborationModeId)
-						? collaborationModeId
-						: undefined,
-				reasoningEffort:
-					preferredEffort === null
-						? undefined
-						: agentId === selected?.id
-							? (reasoningEffort ?? preferredEffort)
-							: preferredEffort,
-				preferHighestReasoningEffort: preferredEffort === null,
-				fastMode: fastAvailable ? fastEnabled : undefined,
+				workflow,
+				workflowTarget: resolveWorkflowTarget(resolvedContextPaths, workflow),
+				modelId: agent.modelId,
+				preferredEffort: agent.preferredEffort,
 				skillIds: resolvedSkillIds,
-				permissionMode: loadSettings().agentPermissionMode,
 			});
 			if (
 				sessionContextGeneration !== sessionContextGenRef.current ||
@@ -500,35 +722,24 @@ export function useAgentSend({
 			}
 			knownSessionIdsRef.current.add(accepted.sessionId);
 			pendingSubmissionSessionIdRef.current = accepted.sessionId;
+			const binding = visualTraceBinding(
+				target.activeHistory,
+				options,
+				resolvedVisualDrafts,
+			);
 			// Bind disk finalizers for this runtime session:
 			// - first turn with visualDrafts → create mark files
 			// - follow-up on a bound pin (no new drafts) → re-register pending
 			//   so complete/fail still patches marks/<id>.json
-			const historyVisualTraceId =
-				activeHistory && "visualTraceId" in activeHistory
-					? (activeHistory as { visualTraceId?: string }).visualTraceId
-					: undefined;
-			const historyPaperAbs =
-				activeHistory && "paperAbsPath" in activeHistory
-					? (activeHistory as { paperAbsPath?: string }).paperAbsPath
-					: undefined;
-			const continueVisualTraceId = !hasVisualDrafts
-				? options?.visualTraceId?.trim() ||
-					historyVisualTraceId?.trim() ||
-					undefined
-				: undefined;
-			const continuePaperAbs = !hasVisualDrafts
-				? options?.paperAbsPath?.trim() || historyPaperAbs?.trim() || undefined
-				: undefined;
 			await bindVisualTracesForTurn({
 				runtimeSessionId: accepted.sessionId,
 				messageId: accepted.messageId,
-				agentId,
+				agentId: agent.agentId,
 				vaultPath,
 				userText: text,
 				visualDrafts: resolvedVisualDrafts,
-				continueVisualTraceId,
-				continuePaperAbs,
+				continueVisualTraceId: binding.continueVisualTraceId,
+				continuePaperAbs: binding.continuePaperAbs,
 			});
 			await bindAskThreadsForTurn({
 				runtimeSessionId: accepted.sessionId,
@@ -546,91 +757,20 @@ export function useAgentSend({
 			const pendingSessionEvents =
 				pendingSessionEventsRef.current.get(accepted.sessionId) ?? [];
 			pendingSessionEventsRef.current.delete(accepted.sessionId);
-			const agentLine: ChatLine = {
-				id: nextLineId("agent"),
-				kind: "agent",
-				parts: [],
-				streaming: true,
-			};
-			// Clone so history entry and active view never share array/object identity
-			// (prevents cross-session stream updates mutating the wrong transcript).
-			const pendingLines: ChatLine[] = [...sessionStartLines, agentLine];
-			const historyLines: ChatLine[] = pendingLines.map((line) => {
-				if (line.kind === "agent") {
-					return { ...line, parts: [...line.parts] };
-				}
-				return { ...line };
+			publishAcceptedTurn({
+				sessionId: accepted.sessionId,
+				agentId: agent.agentId,
+				activeHistory: target.activeHistory,
+				historyTitle,
+				binding,
+				sessionStartLines,
+				submittedComposerState,
 			});
-			completeComposerSubmission(accepted.sessionId, submittedComposerState);
-			// Runtime session id is the stream correlation key; durable continue
-			// uses providerSessionId set on agent:completed (via session/load|resume).
-			activeTabRef.current = accepted.sessionId;
-			setActiveTabId(accepted.sessionId);
-			knownSessionIdsRef.current.add(accepted.sessionId);
-			const boundVisualTraceId =
-				options?.visualTraceId?.trim() ||
-				historyVisualTraceId ||
-				resolvedVisualDrafts[0]?.id;
-			const boundPaperAbs =
-				options?.paperAbsPath?.trim() ||
-				historyPaperAbs ||
-				resolvedVisualDrafts[0]?.paperAbsPath;
-			const nextHistoryItem: ChatSessionHistoryItem = {
-				id: accepted.sessionId,
-				agentId,
-				source: "local",
-				title: activeHistory?.title || historyTitle || t("defaultName"),
-				agentName: selected?.name ?? t("defaultName"),
-				startedAt:
-					activeHistory?.startedAt ||
-					formatLocaleTimestamp(new Date(), i18nLanguage),
-				lines: historyLines,
-				status: "running",
-				// Carry over pin session provider id until completed event.
-				providerSessionId: activeHistory?.providerSessionId ?? null,
-				resumeable: true,
-				...(boundVisualTraceId ? { visualTraceId: boundVisualTraceId } : {}),
-				...(boundPaperAbs ? { paperAbsPath: boundPaperAbs } : {}),
-			};
-			setSessionHistory((prev) =>
-				upsertChatSessionTurn(
-					// Drop superseded visual-trace placeholders before applying the
-					// provider-id based conversation merge.
-					prev.filter(
-						(item) =>
-							!(
-								activeHistory &&
-								isVisualTraceHistoryId(activeHistory.id) &&
-								item.id === activeHistory.id
-							) &&
-							!(
-								boundVisualTraceId &&
-								"visualTraceId" in item &&
-								(item as { visualTraceId?: string }).visualTraceId ===
-									boundVisualTraceId &&
-								item.id !== accepted.sessionId
-							),
-					),
-					nextHistoryItem,
-					activeHistory,
-				),
+			return replayDeferredEvents(
+				accepted.sessionId,
+				pendingSessionEvents,
+				pendingTerminal,
 			);
-			setLines(pendingLines);
-			for (const pendingEvent of pendingSessionEvents) {
-				if (pendingEvent.kind === "stream") {
-					applyStreamEvent(pendingEvent.event);
-				} else if (pendingEvent.kind === "tool") {
-					applyToolEvent(pendingEvent.event);
-				} else {
-					applyPlanEvent(pendingEvent.event);
-				}
-			}
-			if (pendingTerminal?.kind === "completed") {
-				completeSession(pendingTerminal.event);
-			} else if (pendingTerminal?.kind === "failed") {
-				failSession(accepted.sessionId, pendingTerminal.error);
-			}
-			return pendingTerminal?.kind !== "failed";
 		} catch (e) {
 			if (
 				sessionContextGeneration === sessionContextGenRef.current &&
@@ -642,9 +782,7 @@ export function useAgentSend({
 		} finally {
 			if (submissionGeneration === submissionGenRef.current) {
 				pendingSubmissionSessionIdRef.current = null;
-				submittingRef.current = false;
-				setSubmitting(false);
-				setStoreSubmitting(false);
+				setSubmittingFlag(false);
 			}
 		}
 	};
@@ -688,11 +826,7 @@ export function useAgentSend({
 				visualDrafts: frozenVisualDrafts,
 				...(attached.length ? { images: attached } : {}),
 			};
-			setMessageQueue((prev) => {
-				const next = [...prev, item];
-				messageQueueRef.current = next;
-				return next;
-			});
+			setMessageQueue((prev) => [...prev, item]);
 			// Mirror post-submit composer cleanup for the queued turn.
 			setComposerText((current) => (current === textRaw ? "" : current));
 			setSelectedSkillIds((prev) =>
@@ -779,11 +913,7 @@ export function useAgentSend({
 	};
 
 	const removeQueuedMessage = useCallback((id: string) => {
-		setMessageQueue((prev) => {
-			const next = prev.filter((item) => item.id !== id);
-			messageQueueRef.current = next;
-			return next;
-		});
+		setMessageQueue((prev) => prev.filter((item) => item.id !== id));
 	}, []);
 
 	const sendRef = useRef(send);
@@ -926,7 +1056,12 @@ export function useAgentSend({
 		sessionHistoryRef,
 	]);
 
-	// Drain waitlist once the active session is idle again.
+	/**
+	 * The waitlist drains reactively: any transition of the active tab back
+	 * to idle (run completed / failed / cancelled in the session store) or
+	 * the end of a submit / agent switch re-runs this effect, which pops the
+	 * queue head and sends it. drainInFlightRef prevents overlapping sends.
+	 */
 	useEffect(() => {
 		if (activeTabIsRunning || submitting || switching) return;
 		if (messageQueue.length === 0) return;
@@ -935,11 +1070,7 @@ export function useAgentSend({
 		const head = messageQueue[0];
 		if (!head) return;
 		drainInFlightRef.current = true;
-		setMessageQueue((prev) => {
-			const next = prev.filter((item) => item.id !== head.id);
-			messageQueueRef.current = next;
-			return next;
-		});
+		setMessageQueue((prev) => prev.filter((item) => item.id !== head.id));
 
 		void (async () => {
 			try {

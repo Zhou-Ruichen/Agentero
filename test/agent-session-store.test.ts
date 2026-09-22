@@ -11,7 +11,6 @@ beforeEach(() => {
 		activeTabId: "draft",
 		hydratingSessionId: null,
 		draftLines: EMPTY_CHAT_LINES,
-		submitting: false,
 		runningSessionIds: [],
 		turnRequest: null,
 	});

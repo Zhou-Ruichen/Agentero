@@ -5,7 +5,7 @@
  * cross-window session handoff, agent switch, and new conversation.
  * UI lives in sibling components under `src/components/agent/`.
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useAgentComposer } from "@/components/agent/hooks/use-agent-composer";
 import { useAgentConfig } from "@/components/agent/hooks/use-agent-config";
@@ -26,6 +26,7 @@ import {
 import { agentChromeStore } from "@/lib/agent/agent-chrome-store";
 import {
 	applyAgentSessionHandoffOnce,
+	isActiveTabRunning,
 	useActiveChatLines,
 	useAgentSessionStore,
 } from "@/lib/agent/agent-session-store";
@@ -94,7 +95,6 @@ export function useAgentPanel({
 		knownSessionIdsRef,
 		sessionHistoryRef,
 		vaultPathRef,
-		previousVaultPathRef,
 	} = refs;
 
 	// Shared store selectors (single source of truth for the transcript).
@@ -112,12 +112,24 @@ export function useAgentPanel({
 	const hydrateAndActivateSession = useAgentSessionStore(
 		(s) => s.hydrateAndActivateSession,
 	);
-	const setStoreSubmitting = useAgentSessionStore((s) => s.setSubmitting);
 
 	const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
 	const [switching, setSwitching] = useState(false);
 	const [submitting, setSubmitting] = useState(false);
 	const [historyOpen, setHistoryOpen] = useState(false);
+
+	/**
+	 * Sole writer for the submitting flag: mirrors it into submittingRef for
+	 * synchronous guards in event callbacks while updating render state.
+	 * Never write the ref or the state directly.
+	 */
+	const setSubmittingFlag = useCallback(
+		(value: boolean) => {
+			submittingRef.current = value;
+			setSubmitting(value);
+		},
+		[submittingRef],
+	);
 
 	const composerState = useSessionComposerState({
 		vaultPath,
@@ -131,12 +143,9 @@ export function useAgentPanel({
 		mentionedPaths,
 		includeSelectedFile,
 		activateSession: activateComposerSession,
-		completeSubmission: completeComposerSubmission,
 		resetSession: resetComposerSession,
 		setText: setComposerText,
-		setMentionedPaths,
 		setSelectedSkillIds,
-		snapshot: snapshotComposerState,
 	} = composerState;
 
 	const contextPaths = useMemo(() => {
@@ -154,6 +163,9 @@ export function useAgentPanel({
 	useEffect(() => {
 		sessionHistoryRef.current = sessionHistory;
 	}, [sessionHistory, sessionHistoryRef]);
+
+	/** Last-seen vault path; drives the vault-switch reset effect below. */
+	const previousVaultPathRef = useRef(vaultPath);
 
 	useEffect(() => {
 		vaultPathRef.current = vaultPath;
@@ -241,25 +253,13 @@ export function useAgentPanel({
 		});
 	}, [selected]);
 
-	const activeTabSession = sessionHistory.find(
-		(session) => session.id === activeTabId,
-	);
-	const activeTabIsRunning = activeTabSession?.status === "running";
+	const activeTabIsRunning = useAgentSessionStore(isActiveTabRunning);
 	const activeUsage = usageBySession[activeTabId] ?? usage;
 	const hasRunningSessions = sessionHistory.some(
 		(session) => session.status === "running",
 	);
 
-	const {
-		toolAskUserRequest,
-		setToolAskUserRequest,
-		applyStreamEvent,
-		applyToolEvent,
-		applyPlanEvent,
-		completeSession,
-		failSession,
-		phaseBySession,
-	} = useAgentSessionRuntime({
+	const runtime = useAgentSessionRuntime({
 		refs,
 		t,
 		setSessionHistory,
@@ -272,6 +272,7 @@ export function useAgentPanel({
 		setAcpCommandsByAgent,
 		setAgentListenersReady,
 	});
+	const { toolAskUserRequest, setToolAskUserRequest, phaseBySession } = runtime;
 
 	const {
 		permissionRequest,
@@ -284,6 +285,20 @@ export function useAgentPanel({
 		toolAskUserRequest,
 		setToolAskUserRequest,
 	});
+
+	/** Request-shaping context for the send pipeline (agent/model selection). */
+	const turnConfig = {
+		selected,
+		registry,
+		refresh,
+		modelId,
+		collaborationModeId,
+		collaborationOptions,
+		reasoningEffort,
+		fastAvailable,
+		fastEnabled,
+		acpCommandsByAgent,
+	};
 
 	const {
 		send,
@@ -299,41 +314,16 @@ export function useAgentPanel({
 		i18nLanguage: i18n.language,
 		vaultPath,
 		lines,
-		setLines,
-		setSessionHistory,
-		setActiveTabId,
-		activeTabId,
-		activeTabIsRunning,
 		submitting,
 		switching,
-		setSubmitting,
-		setStoreSubmitting,
+		setSubmittingFlag,
 		setHistoryOpen,
 		setSelectedAgentId,
-		selected,
-		registry,
-		refresh,
-		modelId,
-		collaborationModeId,
-		collaborationOptions,
-		reasoningEffort,
-		fastAvailable,
-		fastEnabled,
-		acpCommandsByAgent,
-		contextPaths,
 		selectedVaultPath,
-		snapshotComposerState,
-		completeComposerSubmission,
-		setComposerText,
-		setMentionedPaths,
-		setSelectedSkillIds,
-		activateComposerSession,
-		applyStreamEvent,
-		applyToolEvent,
-		applyPlanEvent,
-		completeSession,
-		failSession,
-		setToolAskUserRequest,
+		contextPaths,
+		composer: composerState,
+		turnConfig,
+		runtime,
 	});
 
 	const {
@@ -420,8 +410,7 @@ export function useAgentPanel({
 		}
 		resetSessionContext();
 		submissionGenRef.current += 1;
-		submittingRef.current = false;
-		setSubmitting(false);
+		setSubmittingFlag(false);
 		setLines([]);
 		setSessionHistory([]);
 		setUsage(null);
@@ -448,9 +437,8 @@ export function useAgentPanel({
 		setComposerMenuDismissed,
 		setMentionActiveIndex,
 		setSkillActiveIndex,
-		previousVaultPathRef,
 		activeTabRef,
-		submittingRef,
+		setSubmittingFlag,
 		activeConversationRef,
 		submissionGenRef,
 		sessionHistoryRef.current,

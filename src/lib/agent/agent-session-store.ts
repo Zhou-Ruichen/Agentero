@@ -65,7 +65,7 @@ export function getActiveLines(
 	return session?.lines ?? EMPTY_CHAT_LINES;
 }
 
-type AgentSessionStore = {
+export type AgentSessionStore = {
 	sessions: AgentSessionRecord[];
 	activeTabId: string;
 	/** Active session id whose transcript is being restored via session/load. */
@@ -75,8 +75,6 @@ type AgentSessionStore = {
 	 * returns a runtime session id). Cleared when leaving draft.
 	 */
 	draftLines: ChatLine[];
-	/** True while a panel-owned run is in flight for the active tab. */
-	submitting: boolean;
 	/** Streaming/running session ids. */
 	runningSessionIds: string[];
 
@@ -91,7 +89,6 @@ type AgentSessionStore = {
 	startDraft: () => void;
 	/** Replace/update lines for the active tab (draft or session row). */
 	setLines: (update: ChatLine[] | ((prev: ChatLine[]) => ChatLine[])) => void;
-	setSubmitting: (v: boolean) => void;
 	setRunningSessionIds: (
 		update: string[] | ((prev: string[]) => string[]),
 	) => void;
@@ -139,7 +136,6 @@ export const agentSessionStore = createStore<AgentSessionStore>((set, get) => ({
 	activeTabId: "draft",
 	hydratingSessionId: null,
 	draftLines: EMPTY_CHAT_LINES,
-	submitting: false,
 	runningSessionIds: [],
 	turnRequest: null,
 	_sendHandler: null,
@@ -193,9 +189,6 @@ export const agentSessionStore = createStore<AgentSessionStore>((set, get) => ({
 			sessions[idx] = { ...sessions[idx], lines: nextLines };
 			return { sessions };
 		}),
-
-	setSubmitting: (v) =>
-		set((s) => (s.submitting === v ? s : { submitting: v })),
 
 	setRunningSessionIds: (update) =>
 		set((s) => {
@@ -313,6 +306,13 @@ export function useActiveChatLines(): ChatLine[] {
 	);
 }
 
+/** Whether the active tab's session has a turn in flight. */
+export function isActiveTabRunning(s: AgentSessionStore): boolean {
+	return s.sessions.some(
+		(session) => session.id === s.activeTabId && session.status === "running",
+	);
+}
+
 export function getAgentSessionState(): AgentSessionStore {
 	return agentSessionStore.getState();
 }
@@ -374,7 +374,6 @@ export function clearAgentVaultState(): void {
 		activeTabId: "draft",
 		hydratingSessionId: null,
 		draftLines: EMPTY_CHAT_LINES,
-		submitting: false,
 		runningSessionIds: [],
 		turnRequest: null,
 	});
