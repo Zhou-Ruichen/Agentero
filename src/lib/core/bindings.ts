@@ -1246,6 +1246,8 @@ export type AgentTemplate = "opencode" |
  *  Docs: https://github.com/NousResearch/hermes-agent
  */
 "hermes" | "claude-acp" | "codex-acp" | 
+/**  Google Antigravity's official ACP server (separate from the retired `agy-acp` adapter). */
+"antigravity-acp" |
 /**
  *  Qoder CLI native ACP (`qodercli --acp`).
  *  Docs: https://docs.qoder.com/en/cli/acp
@@ -5479,4 +5481,3 @@ function makeEvent<T>(name: string, serialize?: (payload: T) => unknown, deseria
 
     return Object.assign(fn, base);
 }
-

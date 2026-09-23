@@ -1,4 +1,35 @@
 use crate::features::agent::models::{AgentTemplate, AgentTemplateInfo};
+use std::path::PathBuf;
+
+/// Directory owned by Agentero for the official Antigravity ACP package.
+pub fn antigravity_install_dir() -> PathBuf {
+    dirs::data_local_dir()
+        .or_else(dirs::home_dir)
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("Agentero")
+        .join("agents")
+        .join("antigravity-acp")
+}
+
+/// File name of the ACP server inside the managed directory (the Windows
+/// archive ships an `.exe`, the other platforms a `.par`).
+pub fn antigravity_server_name() -> &'static str {
+    if cfg!(windows) {
+        "agy_acp_server.exe"
+    } else {
+        "agy_acp_server.par"
+    }
+}
+
+pub fn antigravity_command() -> String {
+    let name = antigravity_server_name();
+    let managed = antigravity_install_dir().join(name);
+    if managed.is_file() {
+        managed.display().to_string()
+    } else {
+        name.to_string()
+    }
+}
 
 /// Preset command templates only — host binaries are never bundled with
 /// Agentero. The Claude/Codex ACP adapters are the one exception to "nothing
@@ -312,6 +343,29 @@ pub fn builtin_templates() -> Vec<AgentTemplateInfo> {
             install_command: Some(CODEX_ACP_INSTALL_COMMAND.to_string()),
             login_command: Some("codex login".to_string()),
         },
+        // The official registry has no macOS Intel build.
+        #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+        AgentTemplateInfo {
+            id: AgentTemplate::AntigravityAcp.as_str().to_string(),
+            name: "Antigravity".to_string(),
+            description: "Google Antigravity via its official ACP server.".to_string(),
+            command: antigravity_command(),
+            // Match the launch arguments published in the official ACP registry.
+            args: if cfg!(target_os = "linux") {
+                vec!["--uid=".to_string()]
+            } else {
+                vec![]
+            },
+            detect_command: None,
+            install_hint: "Download the official ACP server into Agentero's managed directory; \
+                localharness_external is kept beside it. \
+                https://antigravity.google/docs/ide/extensions/zed"
+                .to_string(),
+            // Antigravity is installed by the local Registry-aware lifecycle
+            // path. There is no equivalent shell command for remote hosts.
+            install_command: None,
+            login_command: None,
+        },
         AgentTemplateInfo {
             id: AgentTemplate::Hermes.as_str().to_string(),
             name: "Hermes Agent".to_string(),
@@ -456,6 +510,7 @@ pub fn template_from_id(id: &str) -> AgentTemplate {
         "hermes" => AgentTemplate::Hermes,
         "claude-acp" => AgentTemplate::ClaudeAcp,
         "codex-acp" => AgentTemplate::CodexAcp,
+        "antigravity-acp" => AgentTemplate::AntigravityAcp,
         "qodercli" => AgentTemplate::QoderCli,
         "grok-build" => AgentTemplate::GrokBuild,
         "pi" => AgentTemplate::Pi,
