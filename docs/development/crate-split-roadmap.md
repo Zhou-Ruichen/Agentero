@@ -75,7 +75,7 @@ parse 引擎同理：远端引擎（MinerU/Paddle/OpenAI-compatible，依赖 `la
 3. **保留语义目录**：继续 feature-first，不预设 core 顶层扁平化、新 platform 层或更多 crate。Agent 先解耦事件目标与执行环境，可以继续留在 desktop crate；别名与物理搬运后置。
 4. **reqwest 双版本对齐**：锁文件中同时存在 `reqwest 0.12.28`（agentero-core / agentero 直接使用）与 `reqwest 0.13.4`（传递依赖引入，如 rmcp 等）。两份 TLS/连接池栈增大包体与审计面；待依赖链（rmcp / tauri 生态）稳定后统一到一个大版本，core 与 Host 必须同步升级以避免 feature 漂移。
 5. **src-tauri 依赖清理**（保守未删）：迁移后 `feed-rs`、`dom_smoothie`、`pulldown-cmark`、`bitflags` 在 `src-tauri/src` 已无直接引用，可在确认无 build 脚本/宏隐式依赖后从 `src-tauri/Cargo.toml` 移除。
-6. **iOS/Android 目标**：core 的 `not(ios/android)` 门（parse/locate/liteparse）与 Host 侧模块 cfg 门需保持同步；mobile 构建恢复时验证 remote bridge 路径。
+6. **iOS/Android 目标**：core 的 `not(ios/android)` 门（parse/locate/liteparse，以及依赖它们的 plaza scratch 全文准备）与 Host 侧模块 cfg 门需保持同步；mobile 构建恢复时验证 remote bridge 路径。
 
 ## 验收快照（Phase 2 完成时）
 

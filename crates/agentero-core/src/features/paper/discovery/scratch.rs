@@ -7,21 +7,27 @@
 //! reused until the size cap evicts the least-recently-used ones.
 
 use std::path::{Path, PathBuf};
+#[cfg(any(test, not(any(target_os = "ios", target_os = "android"))))]
 use std::time::Duration;
 
 use serde::Serialize;
 
 use crate::error::AppError;
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
 use crate::features::paper::analyze::parse::engines::parse_body_with_engine;
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
 use crate::http;
 use crate::paths;
 
 /// Total cap for all scratch papers (PDF + markdown), oldest-first eviction.
 /// Bounded at cap + one in-flight download (`MAX_PAPER_PDF_BYTES`).
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
 const MAX_TOTAL_BYTES: u64 = 500 * 1024 * 1024;
 /// Per-paper download cap: streaming aborts (and cleans the partial) beyond
 /// this, so one pathological response cannot blow the memory or disk budget.
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
 const MAX_PAPER_PDF_BYTES: u64 = 100 * 1024 * 1024;
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
 const DOWNLOAD_TIMEOUT_SECS: u64 = 90;
 /// Marker file rewritten on every use; mtime drives LRU eviction.
 const LAST_USED_FILE: &str = ".last-used";
@@ -102,6 +108,7 @@ fn touch_last_used(dir: &Path) {
 
 /// Directory "last used" instant: the marker file's mtime, falling back to
 /// the directory mtime for entries created before the marker existed.
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
 fn dir_last_used(dir: &Path) -> std::time::SystemTime {
     dir.join(LAST_USED_FILE)
         .metadata()
@@ -127,6 +134,7 @@ fn dir_size(dir: &Path) -> u64 {
 
 /// Delete oldest scratch papers until the total fits `cap`. The paper being
 /// prepared right now (`keep`) is never evicted.
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
 fn enforce_cap_in(root: &Path, keep: &Path, cap: u64) {
     let Ok(entries) = std::fs::read_dir(root) else {
         return;
@@ -161,6 +169,7 @@ fn enforce_cap_in(root: &Path, keep: &Path, cap: u64) {
 /// oversized response can never buffer in memory or blow past the cache
 /// budget. The `%PDF-` magic is checked on the first chunk before anything
 /// is written.
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
 async fn stream_pdf_to_file(url: &str, tmp: &Path) -> Result<(), AppError> {
     use tokio::io::AsyncWriteExt;
 
@@ -220,6 +229,7 @@ async fn stream_pdf_to_file(url: &str, tmp: &Path) -> Result<(), AppError> {
     Ok(())
 }
 
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
 async fn download_pdf(arxiv_id: &str, pdf_path: &Path) -> Result<(), AppError> {
     let url = format!("https://arxiv.org/pdf/{arxiv_id}");
     let tmp = pdf_path.with_extension("pdf.part");
@@ -254,15 +264,31 @@ async fn ensure_paper_in(root: &Path, arxiv_id: &str) -> Result<ScratchPaper, Ap
         });
     }
 
-    std::fs::create_dir_all(&dir)
+    materialize_scratch(root, id, &dir, &pdf_path, &markdown_path).await
+}
+
+/// Download the PDF and turn it into `PAPER.md`.
+///
+/// `parse::engines` (liteparse) is compiled out on iOS/Android, matching
+/// `analyze::parse`. An existing scratch copy can still be reused above;
+/// preparing a new one is desktop-only.
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
+async fn materialize_scratch(
+    root: &Path,
+    id: &str,
+    dir: &Path,
+    pdf_path: &Path,
+    markdown_path: &Path,
+) -> Result<ScratchPaper, AppError> {
+    std::fs::create_dir_all(dir)
         .map_err(|e| AppError::message(format!("create scratch dir: {e}")))?;
 
     if !pdf_path.is_file() {
-        download_pdf(id, &pdf_path).await?;
+        download_pdf(id, pdf_path).await?;
     }
 
     let mut messages = Vec::new();
-    let outcome = parse_body_with_engine(&pdf_path, None, &mut messages).await?;
+    let outcome = parse_body_with_engine(pdf_path, None, &mut messages).await?;
     if outcome.markdown.trim().is_empty() {
         return Err(AppError::message(format!(
             "scratch parse produced no text ({})",
@@ -270,12 +296,12 @@ async fn ensure_paper_in(root: &Path, arxiv_id: &str) -> Result<ScratchPaper, Ap
         )));
     }
     let tmp = markdown_path.with_extension("md.part");
-    std::fs::write(&tmp, outcome.markdown)
+    std::fs::write(&tmp, &outcome.markdown)
         .map_err(|e| AppError::message(format!("write scratch markdown: {e}")))?;
-    std::fs::rename(&tmp, &markdown_path)
+    std::fs::rename(&tmp, markdown_path)
         .map_err(|e| AppError::message(format!("finalize scratch markdown: {e}")))?;
-    touch_last_used(&dir);
-    enforce_cap_in(root, &dir, MAX_TOTAL_BYTES);
+    touch_last_used(dir);
+    enforce_cap_in(root, dir, MAX_TOTAL_BYTES);
 
     Ok(ScratchPaper {
         arxiv_id: id.to_string(),
@@ -284,6 +310,19 @@ async fn ensure_paper_in(root: &Path, arxiv_id: &str) -> Result<ScratchPaper, Ap
         pdf_path: pdf_path.to_string_lossy().into_owned(),
         reused: false,
     })
+}
+
+#[cfg(any(target_os = "ios", target_os = "android"))]
+async fn materialize_scratch(
+    _root: &Path,
+    _id: &str,
+    _dir: &Path,
+    _pdf_path: &Path,
+    _markdown_path: &Path,
+) -> Result<ScratchPaper, AppError> {
+    Err(AppError::message(
+        "scratch PDF parsing is not available on this platform",
+    ))
 }
 
 pub async fn ensure_paper(arxiv_id: &str) -> Result<ScratchPaper, AppError> {
@@ -383,6 +422,7 @@ mod tests {
         assert!(!root.exists());
     }
 
+    #[cfg(not(any(target_os = "ios", target_os = "android")))]
     #[test]
     fn eviction_is_oldest_first_and_keeps_fresh_entry() {
         let root = tmp_root("evict");
