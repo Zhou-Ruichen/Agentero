@@ -205,7 +205,7 @@ pnpm dev
 
 1. Fork 后创建功能分支。
 2. 保持改动聚焦，并遵守现有 lint/format 设置（`pnpm lint` / `pnpm format`）。
-3. PR 描述清楚改动内容和原因。
+3. PR 描述清楚改动内容和原因。界面改动上传截图；`feat` 上传一段简单 demo（视频或 GIF）。打开 PR 时会带上模板。
 
 较大的想法请先开 issue 对齐范围。
 

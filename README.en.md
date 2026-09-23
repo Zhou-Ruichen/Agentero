@@ -203,7 +203,7 @@ Issues and PRs are welcome.
 
 1. Fork the repo and create a feature branch.
 2. Keep changes focused and follow the existing lint/format setup (`pnpm lint` / `pnpm format`).
-3. Describe what the PR changes and why in the PR description.
+3. Describe what the PR changes and why. Upload screenshots for UI changes, and a short demo (video or GIF) for `feat`s. New pull requests include the template.
 
 For larger ideas, open an issue first to align on scope.
 
