@@ -436,6 +436,23 @@ pub(crate) const ACP_TIMEOUT: std::time::Duration = std::time::Duration::from_se
 /// working agents into hard "agent unavailable" failures.
 pub(crate) const ACP_INITIALIZE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
+/// `session/new` during warm gets the same allowance as `initialize`: heavy BYOA
+/// agents (Hermes profiles) build the full agent — provider inventory, tools,
+/// MCP — on session create, and a cold spawn racing other warm-ups blows the
+/// shared 15s budget even though the agent is healthy. Only warm uses this;
+/// interactive turns keep the responsive 15s budget.
+pub(crate) const ACP_NEW_SESSION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// `session/new` variant of [`timed_acp_request`]; see [`ACP_NEW_SESSION_TIMEOUT`].
+pub(crate) async fn timed_acp_new_session<T, E>(
+    request: impl std::future::Future<Output = Result<T, E>>,
+) -> Result<T, agent_client_protocol::Error>
+where
+    E: std::fmt::Display,
+{
+    timed_acp_request_with(ACP_NEW_SESSION_TIMEOUT, "new_session", request).await
+}
+
 pub(crate) async fn timed_acp_request<T, E>(
     label: &str,
     request: impl std::future::Future<Output = Result<T, E>>,

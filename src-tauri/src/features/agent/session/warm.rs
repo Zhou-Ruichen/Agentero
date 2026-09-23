@@ -9,10 +9,10 @@
 
 use crate::features::agent::acp::client::{
     acp_terminals, agent_spawn_cwd, client_initialize_request, timed_acp_initialize,
-    timed_acp_request, to_acp_agent,
+    timed_acp_new_session, timed_acp_request, to_acp_agent,
 };
 use crate::features::agent::acp::updates::{
-    emit_session_config_options, models_from_config_options,
+    emit_session_config_options, models_from_config_options, models_from_session_models_value,
 };
 use crate::features::agent::models::{AgentDescriptor, WarmResult};
 use crate::features::agent::runtime::events::AgentEventEmitter;
@@ -24,7 +24,7 @@ use crate::features::agent::session::pool::{
     pool_key, AgentWarmPool, PoolKey, PooledSlot, POOL_IDLE_TTL,
 };
 use agent_client_protocol::schema::v1::{DeleteSessionRequest, NewSessionRequest};
-use agent_client_protocol::{Agent, ConnectionTo};
+use agent_client_protocol::{Agent, ConnectionTo, UntypedMessage};
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
@@ -252,13 +252,25 @@ impl WarmSetupCtx {
         let can_resume = session_caps.resume.is_some();
         let can_load = init.agent_capabilities.load_session;
 
-        let new_session = timed_acp_request(
-            "new_session",
+        // Send session/new untyped so the raw response survives: the schema drops
+        // hermes-agent's pre-stabilization top-level `models` field on deserialize,
+        // and the typed NewSessionResponse would lose it before we can look.
+        let raw_new_session = timed_acp_new_session(
             connection
-                .send_request(NewSessionRequest::new(self.cwd.clone()))
+                .send_request(
+                    UntypedMessage::new("session/new", NewSessionRequest::new(self.cwd.clone()))
+                        .map_err(|e| {
+                            agent_client_protocol::Error::internal_error().data(e.to_string())
+                        })?,
+                )
                 .block_task(),
         )
         .await?;
+        let new_session: agent_client_protocol::schema::v1::NewSessionResponse =
+            agent_client_protocol::JsonRpcResponse::from_value(
+                "session/new",
+                raw_new_session.clone(),
+            )?;
 
         let acp_session_id = new_session.session_id;
         let config_options = apply_model_and_collaboration_prefs(
@@ -272,9 +284,15 @@ impl WarmSetupCtx {
         )
         .await;
         emit_session_config_options(&self.app, &self.session_id, &self.agent_id, &config_options);
-        if let Some(ev) =
-            models_from_config_options(&self.session_id, &self.agent_id, &config_options)
-        {
+        let models_event = models_from_config_options(
+            &self.session_id,
+            &self.agent_id,
+            &config_options,
+        )
+        .or_else(|| {
+            models_from_session_models_value(&self.session_id, &self.agent_id, &raw_new_session)
+        });
+        if let Some(ev) = models_event {
             if let Ok(mut g) = self.models_out.lock() {
                 *g = Some(ev);
             }
