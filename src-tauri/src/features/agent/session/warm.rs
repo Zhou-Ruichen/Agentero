@@ -9,7 +9,7 @@
 
 use crate::features::agent::acp::client::{
     acp_terminals, agent_spawn_cwd, client_initialize_request, timed_acp_initialize,
-    timed_acp_request, to_acp_agent,
+    timed_acp_new_session, timed_acp_request, to_acp_agent,
 };
 use crate::features::agent::acp::updates::{
     emit_session_config_options, models_from_config_options, models_from_session_models_value,
@@ -255,8 +255,7 @@ impl WarmSetupCtx {
         // Send session/new untyped so the raw response survives: the schema drops
         // hermes-agent's pre-stabilization top-level `models` field on deserialize,
         // and the typed NewSessionResponse would lose it before we can look.
-        let raw_new_session = timed_acp_request(
-            "new_session",
+        let raw_new_session = timed_acp_new_session(
             connection
                 .send_request(
                     UntypedMessage::new("session/new", NewSessionRequest::new(self.cwd.clone()))
