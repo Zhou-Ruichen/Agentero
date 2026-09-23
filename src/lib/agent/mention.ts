@@ -190,6 +190,8 @@ export function filterMentionOptions(options: {
 	 * Ignores shallow/recent ranking.
 	 */
 	browseRoot?: string | null;
+	/** Paths always eligible (even with an empty query), e.g. collections. */
+	pinned?: readonly string[] | null;
 	limit?: number;
 }): string[] {
 	const limit = options.limit ?? DEFAULT_MENU_LIMIT;
@@ -198,6 +200,7 @@ export function filterMentionOptions(options: {
 	);
 	const recent = (options.recent ?? []).map(normPath).filter(Boolean);
 	const recentRank = new Map(recent.map((p, i) => [p, i]));
+	const pinned = new Set((options.pinned ?? []).map(normPath).filter(Boolean));
 	const query = (options.query ?? "").trim();
 	const labels = options.labelsByPath;
 	const browseRoot = options.browseRoot ? normPath(options.browseRoot) : null;
@@ -224,8 +227,9 @@ export function filterMentionOptions(options: {
 			if (!isPlazaMentionPath(p)) return true;
 			// Plaza entries are title-search targets: surface on typed queries
 			// (label match below) or as recents, never in the empty-query
-			// shallow tree or folder drill-downs.
-			return Boolean(query) || recentRank.has(p);
+			// shallow tree or folder drill-downs. Pinned collections (the
+			// whole arXiv Daily list) stay visible even at an empty query.
+			return Boolean(query) || recentRank.has(p) || pinned.has(p);
 		})
 		.filter((p) => !query || pathMatchesQuery(p, query) || matchesExtra(p));
 

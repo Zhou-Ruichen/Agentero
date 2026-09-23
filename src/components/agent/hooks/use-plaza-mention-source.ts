@@ -6,10 +6,12 @@
  */
 
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import type { PlazaMentionEntry } from "@/lib/agent/plaza-mention";
 import {
 	arxivRecMentionPath,
 	feedMentionPath,
+	PLAZA_ARXIV_REC_COLLECTION_PATH,
 	registerPlazaMentionEntries,
 } from "@/lib/agent/plaza-mention";
 import type { FeedItem, RecommendItem } from "@/lib/core/bindings";
@@ -61,6 +63,7 @@ export function usePlazaMentionSource(
 	vaultPath: string | null,
 ): PlazaMentionEntry[] {
 	const [entries, setEntries] = useState<PlazaMentionEntry[]>([]);
+	const { t } = useTranslation("agent");
 
 	useEffect(() => {
 		// Drop the previous vault's entries and registry first: until the new
@@ -78,8 +81,27 @@ export function usePlazaMentionSource(
 				feedsItems({ limit: FEED_MENTION_LIMIT }).catch(() => []),
 			]);
 			if (cancelled) return;
+			const recEntries = (rec?.items ?? []).map(entryFromRecommend);
+			// Whole-list entry: `@arxiv-daily` filters today's papers in one
+			// turn; the prompt expands to the full abstract catalog.
+			const collection = recEntries.length
+				? [
+						{
+							path: PLAZA_ARXIV_REC_COLLECTION_PATH,
+							source: "arxiv-rec" as const,
+							title: t("composer.plazaCollectionTitle", {
+								count: recEntries.length,
+							}),
+							url: null,
+							abstract: null,
+							publishedAt: rec?.computedAt ?? null,
+							sourceLabel: arxivRecSourceLabel(),
+						},
+					]
+				: [];
 			const next: PlazaMentionEntry[] = [
-				...(rec?.items ?? []).map(entryFromRecommend),
+				...collection,
+				...recEntries,
 				...(feedItems ?? []).map(entryFromFeedItem),
 			];
 			registerPlazaMentionEntries(next);
@@ -88,7 +110,7 @@ export function usePlazaMentionSource(
 		return () => {
 			cancelled = true;
 		};
-	}, [vaultPath]);
+	}, [t, vaultPath]);
 
 	return entries;
 }

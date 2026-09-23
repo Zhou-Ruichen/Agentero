@@ -32,6 +32,15 @@ export function arxivRecMentionPath(arxivId: string): string {
 	return `${PLAZA_MENTION_PREFIX}${ARXIV_REC_SEGMENT}/${arxivId.trim()}`;
 }
 
+/** Whole-source mention: today's full arXiv Daily list as one catalog block. */
+export const PLAZA_ARXIV_REC_COLLECTION_PATH = `${PLAZA_MENTION_PREFIX}${ARXIV_REC_SEGMENT}`;
+
+export function isPlazaCollectionPath(
+	path: string | null | undefined,
+): boolean {
+	return path === PLAZA_ARXIV_REC_COLLECTION_PATH;
+}
+
 export function feedMentionPath(feedItemId: string): string {
 	return `${PLAZA_MENTION_PREFIX}${FEEDS_SEGMENT}/${feedItemId.trim()}`;
 }
@@ -83,15 +92,30 @@ export function plazaMentionArxivId(
  * `registerPlazaMentionEntries` replaces the whole set (vault switch reload).
  */
 const entryByPath = new Map<string, PlazaMentionEntry>();
+/** Normalized arXiv id → mention path, for NEED_FULLTEXT continuation turns. */
+const pathByArxivId = new Map<string, string>();
 
 export function registerPlazaMentionEntries(
 	entries: readonly PlazaMentionEntry[],
 ): void {
 	entryByPath.clear();
+	pathByArxivId.clear();
 	for (const entry of entries) {
 		if (!entry.path) continue;
 		entryByPath.set(entry.path, entry);
+		if (!isPlazaCollectionPath(entry.path)) {
+			const id = plazaMentionArxivId(entry.path);
+			if (id && !pathByArxivId.has(id)) pathByArxivId.set(id, entry.path);
+		}
 	}
+}
+
+/** Mention path registered for an arXiv id (NEED_FULLTEXT continuation). */
+export function plazaMentionPathForArxivId(
+	arxivId: string | null | undefined,
+): string | null {
+	const id = arxivId?.trim().replace(/v[0-9]+$/, "");
+	return (id && pathByArxivId.get(id)) || null;
 }
 
 export function lookupPlazaMention(
@@ -144,10 +168,30 @@ function entryBlock(
 }
 
 /**
+ * Numbered catalog of every registered arXiv Daily paper (rank order), for
+ * whole-list filtering turns. Each line prints the bare arXiv id the agent
+ * can echo back in a `NEED_FULLTEXT` request.
+ */
+function collectionCatalogBlock(title: string): string {
+	const items = [...entryByPath.values()].filter(
+		(entry) =>
+			entry.source === "arxiv-rec" && !isPlazaCollectionPath(entry.path),
+	);
+	const lines = items.map((entry, index) => {
+		const id = plazaMentionArxivId(entry.path) ?? "";
+		const head = `[${index + 1}] ${id} · ${entry.title}`.trim();
+		return entry.abstract ? `${head}\n${entry.abstract}` : head;
+	});
+	return [`### ${title}`, ...lines].join("\n\n");
+}
+
+/**
  * Prompt block for @-mentioned plaza entries. Registered entries expand to
  * their metadata — plus a scratch full-text path when the host prepared one —
  * while stale paths (e.g. a draft restored after a daily refresh) degrade to
- * an explicit unavailable note instead of silently dropping.
+ * an explicit unavailable note instead of silently dropping. The collection
+ * path expands to the whole arXiv Daily catalog plus the two-step
+ * orchestration instruction (abstract-only triage → NEED_FULLTEXT requests).
  */
 export function plazaMentionPromptBlock(options: {
 	plazaPaths: readonly string[];
@@ -158,6 +202,17 @@ export function plazaMentionPromptBlock(options: {
 	const paths = options.plazaPaths.filter(Boolean);
 	if (paths.length === 0) return "";
 	const scratch = options.scratchByPath ?? null;
+
+	const collectionTitle = lookupPlazaMention(
+		PLAZA_ARXIV_REC_COLLECTION_PATH,
+	)?.title;
+	if (collectionTitle && paths.includes(PLAZA_ARXIV_REC_COLLECTION_PATH)) {
+		const catalog = collectionCatalogBlock(collectionTitle);
+		return `${catalog}\n\n${options.t("composer.plazaCollectionInstruction", {
+			max: NEED_FULLTEXT_MAX_IDS,
+		})}`;
+	}
+
 	const blocks = paths.map((path) => {
 		const entry = lookupPlazaMention(path);
 		return entry
@@ -168,4 +223,31 @@ export function plazaMentionPromptBlock(options: {
 	const body = `${header}\n\n${blocks.join("\n\n")}`;
 	if (!paths.some((path) => scratch?.has(path))) return body;
 	return `${body}\n\n${options.t("composer.plazaScratchInstruction")}`;
+}
+
+/** Max papers an agent may request full text for in one NEED_FULLTEXT line. */
+export const NEED_FULLTEXT_MAX_IDS = 3;
+
+/**
+ * Parse a `NEED_FULLTEXT <id>…` request from the first non-empty line of an
+ * agent reply. Returns unique ids (version suffixes tolerated) capped at
+ * [`NEED_FULLTEXT_MAX_IDS`], or null when the reply is not a request.
+ */
+export function parseNeedFulltextIds(text: string): string[] | null {
+	const firstLine =
+		text
+			.split("\n", 1)[0]
+			?.trim()
+			.match(/^NEED_FULLTEXT\s+(.+)$/) ?? null;
+	if (!firstLine) return null;
+	const ids = [
+		...new Set(
+			(firstLine[1] ?? "")
+				.split(/\s+/)
+				.map((token) => token.trim().replace(/v[0-9]+$/, ""))
+				.filter((token) => /^[0-9]{4}\.[0-9]{4,5}$/.test(token)),
+		),
+	];
+	if (ids.length === 0) return null;
+	return ids.slice(0, NEED_FULLTEXT_MAX_IDS);
 }
