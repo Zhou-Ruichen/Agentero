@@ -25,6 +25,7 @@ pub struct VaultSearchArgs {
 }
 
 #[derive(Debug, Serialize, specta::Type)]
+#[cfg_attr(feature = "desktop", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct SearchHit {
     /// Vault-relative md file, e.g. `papers/x/NOTES.md`.
@@ -40,6 +41,7 @@ pub struct SearchHit {
 }
 
 #[derive(Debug, Serialize, specta::Type)]
+#[cfg_attr(feature = "desktop", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct VaultSearchResult {
     pub hits: Vec<SearchHit>,
@@ -49,6 +51,15 @@ pub struct VaultSearchResult {
 
 /// Search the Vault's Markdown files for all whitespace-separated terms (AND).
 pub fn vault_search(args: VaultSearchArgs) -> Result<VaultSearchResult, AppError> {
+    vault_search_filtered(args, &|_| true)
+}
+
+/// Share ranking/snippets while letting MCP apply its file_read path policy
+/// before any directory traversal or file content read. Host behavior is unchanged.
+pub(crate) fn vault_search_filtered(
+    args: VaultSearchArgs,
+    allow_path: &dyn Fn(&Path) -> bool,
+) -> Result<VaultSearchResult, AppError> {
     let vault = crate::core::fs::resolve_vault(&args.vault_path)?;
 
     let terms: Vec<String> = args
@@ -66,7 +77,7 @@ pub fn vault_search(args: VaultSearchArgs) -> Result<VaultSearchResult, AppError
     let limit = args.limit.unwrap_or(60).clamp(1, 200);
 
     let mut files: Vec<PathBuf> = Vec::new();
-    collect_md_files(&vault, 0, &mut files);
+    collect_md_files(&vault, 0, &mut files, allow_path);
 
     let mut hits: Vec<SearchHit> = Vec::new();
     for file in &files {
@@ -80,7 +91,12 @@ pub fn vault_search(args: VaultSearchArgs) -> Result<VaultSearchResult, AppError
     Ok(VaultSearchResult { hits, truncated })
 }
 
-fn collect_md_files(dir: &Path, depth: usize, out: &mut Vec<PathBuf>) {
+fn collect_md_files(
+    dir: &Path,
+    depth: usize,
+    out: &mut Vec<PathBuf>,
+    allow_path: &dyn Fn(&Path) -> bool,
+) {
     if depth > MAX_DEPTH || out.len() >= MAX_FILES {
         return;
     }
@@ -89,6 +105,9 @@ fn collect_md_files(dir: &Path, depth: usize, out: &mut Vec<PathBuf>) {
     };
     for entry in entries.flatten() {
         let path = entry.path();
+        if !allow_path(&path) {
+            continue;
+        }
         let name = entry.file_name();
         let name = name.to_string_lossy();
         if path.is_dir() {
@@ -96,7 +115,7 @@ fn collect_md_files(dir: &Path, depth: usize, out: &mut Vec<PathBuf>) {
             if name.starts_with('.') || name == "node_modules" || name == "source" {
                 continue;
             }
-            collect_md_files(&path, depth + 1, out);
+            collect_md_files(&path, depth + 1, out, allow_path);
         } else if path
             .extension()
             .and_then(|e| e.to_str())

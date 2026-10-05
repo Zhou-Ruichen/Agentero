@@ -39,6 +39,19 @@ pub fn build() -> Vec<OpSpec> {
 
     vec![
         op(
+            "vault.search",
+            None,
+            Some("vault_search"),
+            "Read-only Markdown keyword AND search; read returned paths with file_read.",
+            OpSideEffect::Read,
+            &[OpSurface::Mcp],
+            false,
+            json!({"query": "string", "limit?": "integer (default 60, clamped 1..200)"}),
+            json!({"hits": [{"path": "string", "paperPath?": "string", "title": "string", "snippet": "string", "line": "1-based number", "score": "number"}], "truncated": "bool (more hits than limit)"}),
+            &["message", "io"],
+            &["MCP vault_search { \"query\": \"transformer attention\", \"limit\": 10 }"],
+        ),
+        op(
             "vault.create",
             Some("agentero vault create"),
             None,
