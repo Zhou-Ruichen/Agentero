@@ -154,6 +154,8 @@ mod tests {
         assert!(get("layout.list").is_some());
         assert!(get("paper.set_read").is_some());
         assert!(get("file_read").is_some());
+        assert!(get("page.read").is_some());
+        assert!(get("page_read").is_some());
         assert!(get("file.write").is_some());
         assert!(get("import.pdf").is_some());
         assert!(get("no.such.op").is_none());

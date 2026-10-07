@@ -124,10 +124,17 @@ pub fn list_dir(vault: &Path, rel: &str, limit: usize) -> Result<FileListOut, Ap
 }
 
 /// Use exactly the text-read path policy, before search reads/traverses entries.
+/// Optional catalog metadata filter (`year` / `publication` / `doi` /
+/// `is_read`) narrows hits to papers whose catalog record matches; hits that
+/// do not map to a catalog paper are dropped when any filter is set.
 pub fn search(
     vault: &Path,
     query: String,
     limit: Option<usize>,
+    year: Option<i32>,
+    publication: Option<String>,
+    doi: Option<String>,
+    is_read: Option<bool>,
 ) -> Result<crate::features::markdown::search::VaultSearchResult, AppError> {
     use crate::features::markdown::search::{vault_search_filtered, VaultSearchArgs};
     let root = canonical_root(vault)?;
@@ -136,6 +143,10 @@ pub fn search(
             vault_path: root.to_string_lossy().into_owned(),
             query,
             limit,
+            year,
+            publication,
+            doi,
+            is_read,
         },
         &|path| {
             let Some(rel) = path.strip_prefix(&root).ok().and_then(Path::to_str) else {

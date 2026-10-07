@@ -6,6 +6,7 @@
 //! `paper_path` so the UI can open the paper instead of the raw file.
 
 use crate::core::error::AppError;
+use crate::features::paper::catalog::papers::PaperRecord;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -15,13 +16,81 @@ const MAX_DEPTH: usize = 16;
 const MAX_FILES: usize = 20_000;
 const SNIPPET_CHARS: usize = 200;
 
-#[derive(Debug, Deserialize, specta::Type)]
+#[derive(Debug, Default, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct VaultSearchArgs {
     pub vault_path: String,
     pub query: String,
     #[serde(default)]
     pub limit: Option<usize>,
+    /// Publication year; when set, only hits that map to a catalog paper with
+    /// this exact `year` are returned. Hits with no catalog paper are dropped.
+    #[serde(default)]
+    pub year: Option<i32>,
+    /// Case-insensitive substring match on the catalog `publication` field.
+    #[serde(default)]
+    pub publication: Option<String>,
+    /// Case-insensitive substring match on the catalog `doi` field.
+    #[serde(default)]
+    pub doi: Option<String>,
+    /// Catalog read state; `true` keeps only hits on papers marked read.
+    #[serde(default)]
+    pub is_read: Option<bool>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct MetadataFilter {
+    year: Option<i32>,
+    publication: Option<String>,
+    doi: Option<String>,
+    is_read: Option<bool>,
+}
+
+impl MetadataFilter {
+    fn active(&self) -> bool {
+        self.year.is_some()
+            || !self.publication.as_deref().unwrap_or("").is_empty()
+            || !self.doi.as_deref().unwrap_or("").is_empty()
+            || self.is_read.is_some()
+    }
+
+    fn matches(&self, rec: &crate::features::paper::catalog::papers::PaperRecord) -> bool {
+        if let Some(y) = self.year {
+            if rec.year != Some(y) {
+                return false;
+            }
+        }
+        if let Some(pub_) = self.publication.as_deref().filter(|s| !s.is_empty()) {
+            let p = pub_.to_ascii_lowercase();
+            if !rec
+                .publication
+                .as_deref()
+                .unwrap_or("")
+                .to_ascii_lowercase()
+                .contains(&p)
+            {
+                return false;
+            }
+        }
+        if let Some(d) = self.doi.as_deref().filter(|s| !s.is_empty()) {
+            let d = d.to_ascii_lowercase();
+            if !rec
+                .doi
+                .as_deref()
+                .unwrap_or("")
+                .to_ascii_lowercase()
+                .contains(&d)
+            {
+                return false;
+            }
+        }
+        if let Some(r) = self.is_read {
+            if rec.is_read != r {
+                return false;
+            }
+        }
+        true
+    }
 }
 
 #[derive(Debug, Serialize, specta::Type)]
@@ -33,6 +102,10 @@ pub struct SearchHit {
     /// Vault-relative paper folder when the hit is inside `papers/…`; else omitted.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub paper_path: Option<String>,
+    /// 1-based physical page for `PAPER.md` body hits when `layout.json` maps
+    /// the matched line to a single unambiguous page; omitted otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub page: Option<u32>,
     pub title: String,
     pub snippet: String,
     /// 1-based line of the first matching line (0 when unknown).
@@ -76,6 +149,24 @@ pub(crate) fn vault_search_filtered(
     }
     let limit = args.limit.unwrap_or(60).clamp(1, 200);
 
+    let filter = MetadataFilter {
+        year: args.year,
+        publication: args.publication.clone(),
+        doi: args.doi.clone(),
+        is_read: args.is_read,
+    };
+    let catalog_rows: Option<Vec<PaperRecord>> = if filter.active() {
+        crate::features::paper::catalog::papers::list_all_unique_by_id(&vault).ok()
+    } else {
+        None
+    };
+    let paper_meta: Option<std::collections::HashMap<String, &PaperRecord>> =
+        catalog_rows.as_ref().map(|rows| {
+            rows.iter()
+                .map(|r| (r.path.clone(), r))
+                .collect::<std::collections::HashMap<_, _>>()
+        });
+
     let mut files: Vec<PathBuf> = Vec::new();
     collect_md_files(&vault, 0, &mut files, allow_path);
 
@@ -85,6 +176,49 @@ pub(crate) fn vault_search_filtered(
             hits.push(hit);
         }
     }
+    // Attach a physical page to PAPER.md body hits from layout.json when the
+    // matched line resolves to a single unambiguous page.
+    let mut layout_cache: std::collections::HashMap<
+        String,
+        Option<crate::features::pdf::layout_index::RawLayout>,
+    > = std::collections::HashMap::new();
+    for hit in &mut hits {
+        let is_paper_body = hit
+            .path
+            .rsplit('/')
+            .next()
+            .is_some_and(|f| f.eq_ignore_ascii_case("PAPER.md"));
+        if !is_paper_body {
+            continue;
+        }
+        let Some(paper_path) = hit.paper_path.clone() else {
+            continue;
+        };
+        let layout = layout_cache
+            .entry(paper_path.clone())
+            .or_insert_with(|| {
+                crate::features::pdf::layout_index::load_raw_layout(&vault, &paper_path).ok()
+            })
+            .as_ref();
+        if let Some(layout) = layout {
+            hit.page = crate::features::pdf::layout_index::page_map(layout, &hit.snippet);
+        }
+    }
+
+    // Metadata filtering keeps only hits that map to a catalog paper matching
+    // every requested field. Non-catalog hits are dropped, not silently kept.
+    // When a metadata filter is requested but the catalog cannot be read,
+    // drop every hit: none can be verified against the filter.
+    if filter.active() {
+        match paper_meta {
+            Some(map) => hits.retain(|hit| match hit.paper_path.as_deref() {
+                Some(path) => map.get(path).is_some_and(|rec| filter.matches(rec)),
+                None => false,
+            }),
+            None => hits.clear(),
+        }
+    }
+
     hits.sort_by(|a, b| b.score.cmp(&a.score).then_with(|| a.path.cmp(&b.path)));
     let truncated = hits.len() > limit;
     hits.truncate(limit);
@@ -187,6 +321,7 @@ fn search_file(vault: &Path, file: &Path, terms: &[String]) -> Option<SearchHit>
     Some(SearchHit {
         paper_path: paper_folder_of(&rel),
         path: rel,
+        page: None,
         title,
         snippet,
         line,
@@ -267,6 +402,7 @@ mod tests {
             vault_path: root.to_string_lossy().to_string(),
             query: "transformer attention".into(),
             limit: None,
+            ..Default::default()
         })
         .unwrap();
 
@@ -289,6 +425,7 @@ mod tests {
             vault_path: root.to_string_lossy().to_string(),
             query: "   ".into(),
             limit: None,
+            ..Default::default()
         })
         .unwrap();
         assert!(out.hits.is_empty());
@@ -325,6 +462,7 @@ mod tests {
             vault_path: root.to_string_lossy().to_string(),
             query: "transformer".into(),
             limit: Some(200),
+            ..Default::default()
         })
         .expect("direct search");
         let direct_ms = started.elapsed().as_millis();
@@ -347,6 +485,7 @@ mod tests {
                     vault_path,
                     query: "transformer".into(),
                     limit: Some(200),
+                    ..Default::default()
                 })
                 .expect("blocking search");
                 eprintln!(
