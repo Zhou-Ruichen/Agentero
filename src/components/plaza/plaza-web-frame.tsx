@@ -57,6 +57,7 @@ function isNavMessage(data: unknown): data is NavMessage {
 export function PlazaWebFrame({
 	homeUrl,
 	embedOrigin,
+	lastPathStorageKey,
 	title,
 	className,
 }: {
@@ -64,15 +65,72 @@ export function PlazaWebFrame({
 	homeUrl: string;
 	/** Proxy scheme origin, or null to embed `homeUrl` directly. */
 	embedOrigin: string | null;
+	/** Optional localStorage key used to resume a source at its last in-site path. */
+	lastPathStorageKey?: string;
 	title: string;
 	className?: string;
 }) {
 	const { t } = useTranslation("sidebar");
-	const homePath = `${new URL(homeUrl).pathname || "/"}${new URL(homeUrl).search}`;
+	const home = new URL(homeUrl);
+	const homePath = `${home.pathname || "/"}${home.search}`;
+	const normalizePath = (value: unknown): string | null => {
+		if (
+			typeof value !== "string" ||
+			!value.startsWith("/") ||
+			value.startsWith("//")
+		) {
+			return null;
+		}
+		try {
+			const restored = new URL(value, homeUrl);
+			if (restored.origin !== home.origin) return null;
+			return `${restored.pathname}${restored.search}`;
+		} catch {
+			return null;
+		}
+	};
+	const [initialPath] = useState(() => {
+		if (!lastPathStorageKey || typeof window === "undefined") return homePath;
+		try {
+			const stored = window.localStorage.getItem(lastPathStorageKey);
+			if (!stored?.startsWith("/") || stored.startsWith("//")) {
+				return homePath;
+			}
+			return normalizePath(stored) ?? homePath;
+		} catch {
+			return homePath;
+		}
+	});
+	const historyStorageKey = lastPathStorageKey
+		? `${lastPathStorageKey}:history`
+		: null;
 	/** Visited paths and the cursor into them. Grown by proxy nav messages. */
-	const [nav, setNav] = useState<{ stack: string[]; index: number }>({
-		stack: [homePath],
-		index: 0,
+	const [nav, setNav] = useState<{ stack: string[]; index: number }>(() => {
+		const fallback = { stack: [initialPath], index: 0 };
+		if (!historyStorageKey || typeof window === "undefined") return fallback;
+		try {
+			const stored = window.localStorage.getItem(historyStorageKey);
+			if (!stored) return fallback;
+			const value: unknown = JSON.parse(stored);
+			if (typeof value !== "object" || value === null) return fallback;
+			const candidate = value as { stack?: unknown; index?: unknown };
+			if (
+				!Array.isArray(candidate.stack) ||
+				typeof candidate.index !== "number" ||
+				!Number.isInteger(candidate.index) ||
+				candidate.stack.length === 0 ||
+				candidate.stack.length > 500 ||
+				(candidate.index as number) < 0 ||
+				(candidate.index as number) >= candidate.stack.length
+			) {
+				return fallback;
+			}
+			const stack = candidate.stack.map(normalizePath);
+			if (stack.some((path) => path === null)) return fallback;
+			return { stack: stack as string[], index: candidate.index as number };
+		} catch {
+			return fallback;
+		}
 	});
 	/**
 	 * What the frame is mounted at. `epoch` is bumped only by Back / Forward /
@@ -80,7 +138,10 @@ export function PlazaWebFrame({
 	 * frame records history without remounting (which would reload this path and
 	 * snap the user back to where the frame started).
 	 */
-	const [frame, setFrame] = useState({ path: homePath, epoch: 0 });
+	const [frame, setFrame] = useState({
+		path: nav.stack[nav.index] ?? initialPath,
+		epoch: 0,
+	});
 	/** Needed to post import results back into the frame. */
 	const frameRef = useRef<HTMLIFrameElement>(null);
 	/** While HTML5 DnD is active, disable frame hit-testing so dragover reaches
@@ -154,6 +215,30 @@ export function PlazaWebFrame({
 	const canGoForward = nav.index < nav.stack.length - 1;
 	const currentPath = nav.stack[nav.index] ?? homePath;
 	const frameSrc = embedOrigin ? `${embedOrigin}${frame.path}` : homeUrl;
+
+	useEffect(() => {
+		if (!lastPathStorageKey || typeof window === "undefined") return;
+		try {
+			const current = new URL(currentPath, homeUrl);
+			if (current.origin === home.origin) {
+				window.localStorage.setItem(
+					lastPathStorageKey,
+					`${current.pathname}${current.search}`,
+				);
+			}
+		} catch {
+			// Browsing still works when storage is unavailable or a path is invalid.
+		}
+	}, [currentPath, home.origin, homeUrl, lastPathStorageKey]);
+
+	useEffect(() => {
+		if (!historyStorageKey || typeof window === "undefined") return;
+		try {
+			window.localStorage.setItem(historyStorageKey, JSON.stringify(nav));
+		} catch {
+			// Browsing still works when storage is unavailable or full.
+		}
+	}, [historyStorageKey, nav]);
 
 	return (
 		<div

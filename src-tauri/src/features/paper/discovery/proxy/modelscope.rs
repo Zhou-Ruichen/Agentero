@@ -102,6 +102,119 @@ html body { overflow-y: visible !important; }
     var send = function () {
       post({ path: location.pathname + location.search });
     };
+    var currentScrollPath = function () {
+      return location.pathname + location.search;
+    };
+    var scrollKey = function (path) {
+      return "agentero-plaza:modelscope:scroll:" + path;
+    };
+    var getScrollPosition = function () {
+      var scroller = document.scrollingElement || document.documentElement;
+      var container = document.querySelector(".ms-page-container");
+      return {
+        x: scroller ? scroller.scrollLeft : window.scrollX,
+        y: scroller ? scroller.scrollTop : window.scrollY,
+        containerX: container ? container.scrollLeft : 0,
+        containerY: container ? container.scrollTop : 0
+      };
+    };
+    var writeScroll = function (snapshot) {
+      try {
+        localStorage.setItem(snapshot.key, JSON.stringify(snapshot.position));
+      } catch (e) {}
+    };
+    var pendingScroll = null;
+    var scrollSaveTimer = 0;
+    var flushPendingScroll = function () {
+      if (scrollSaveTimer) window.clearTimeout(scrollSaveTimer);
+      scrollSaveTimer = 0;
+      if (!pendingScroll) return;
+      writeScroll(pendingScroll);
+      pendingScroll = null;
+    };
+    var flushScroll = function () {
+      var hadPending = !!pendingScroll;
+      flushPendingScroll();
+      if (!hadPending) {
+        writeScroll({
+          key: scrollKey(currentScrollPath()),
+          position: getScrollPosition()
+        });
+      }
+    };
+    var saveScroll = function () {
+      pendingScroll = {
+        key: scrollKey(currentScrollPath()),
+        position: getScrollPosition()
+      };
+      if (scrollSaveTimer) return;
+      scrollSaveTimer = window.setTimeout(flushPendingScroll, 250);
+    };
+    document.addEventListener("scroll", saveScroll, { capture: true, passive: true });
+    window.addEventListener("pagehide", flushScroll);
+
+    var restoreGeneration = 0;
+    var restoreObserver = null;
+    var restoreTimeout = 0;
+    var clearScrollRestore = function () {
+      if (restoreObserver) restoreObserver.disconnect();
+      restoreObserver = null;
+      if (restoreTimeout) window.clearTimeout(restoreTimeout);
+      restoreTimeout = 0;
+    };
+    var restoreScroll = function () {
+      var saved = null;
+      try {
+        saved = JSON.parse(
+          localStorage.getItem(scrollKey(currentScrollPath())) || "null"
+        );
+      } catch (e) {}
+      var generation = ++restoreGeneration;
+      clearScrollRestore();
+      if (
+        !saved ||
+        typeof saved.x !== "number" ||
+        typeof saved.y !== "number"
+      ) {
+        return;
+      }
+      var pending = false;
+      var stop = function () {
+        if (generation !== restoreGeneration) return;
+        clearScrollRestore();
+      };
+      var apply = function () {
+        if (pending || generation !== restoreGeneration) return;
+        pending = true;
+        window.requestAnimationFrame(function () {
+          pending = false;
+          if (generation !== restoreGeneration) return;
+          var container = document.querySelector(".ms-page-container");
+          var scroller = document.scrollingElement || document.documentElement;
+          window.scrollTo(saved.x, saved.y);
+          if (container) {
+            container.scrollLeft = saved.containerX || 0;
+            container.scrollTop = saved.containerY || 0;
+          }
+          if (scroller) scroller.scrollLeft = saved.x;
+          var documentReached =
+            Math.abs(window.scrollX - saved.x) <= 2 &&
+            Math.abs(window.scrollY - saved.y) <= 2;
+          var containerReached = container
+            ? Math.abs(container.scrollLeft - (saved.containerX || 0)) <= 2 &&
+              Math.abs(container.scrollTop - (saved.containerY || 0)) <= 2
+            : !(saved.containerX || saved.containerY);
+          if (documentReached && containerReached) stop();
+        });
+      };
+      var root = document.querySelector(".ms-page-container") || document.body;
+      if (root && window.MutationObserver) {
+        restoreObserver = new MutationObserver(apply);
+        restoreObserver.observe(root, { childList: true, subtree: true });
+      }
+      restoreTimeout = window.setTimeout(stop, 10000);
+      apply();
+    };
     // Same-origin URLs must be reopened upstream: the system browser cannot
     // resolve our private scheme.
     var handoff = function (url) {
@@ -112,14 +225,23 @@ html body { overflow-y: visible !important; }
       }
     };
     send();
-    window.addEventListener("pageshow", send);
-    window.addEventListener("popstate", send);
+    window.addEventListener("pageshow", function () {
+      send();
+      restoreScroll();
+    });
+    window.addEventListener("popstate", function () {
+      flushPendingScroll();
+      send();
+      restoreScroll();
+    });
 
     // umi routes through pushState, so clicking a card fires no navigation event
     // at all. Installed from <head>, before umi captures its history reference.
     ["pushState", "replaceState"].forEach(function (name) {
       var original = history[name];
       history[name] = function (state, title, url) {
+        var previousPath = currentScrollPath();
+        var routeChanged = false;
         if (url != null) {
           var target = null;
           try {
@@ -129,9 +251,14 @@ html body { overflow-y: visible !important; }
             handoff(target);
             return;
           }
+          routeChanged =
+            !!target &&
+            target.pathname + target.search !== previousPath;
+          if (routeChanged) flushScroll();
         }
         var result = original.apply(history, arguments);
         send();
+        if (routeChanged) restoreScroll();
         return result;
       };
     });
@@ -241,6 +368,7 @@ html body { overflow-y: visible !important; }
     };
     var start = function () {
       decorate();
+      restoreScroll();
       if (window.MutationObserver) {
         new MutationObserver(schedule).observe(document.body, {
           childList: true,

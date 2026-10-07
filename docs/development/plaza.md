@@ -119,6 +119,8 @@ i18n：`sidebar:plaza.*`。
 | 加载失败 | 代理返回 502 文案 |
 | 入库 | 每行 `[入库]`，见 §3.2.1 |
 
+关闭 Cool Papers 或 ModelScope 标签时 iframe 会销毁。应用按来源保存站内路径栈及其当前位置；两个代理页都按路由保存滚动位置，再次打开时恢复当前页面、后退 / 前进历史和阅读位置。Cool Papers 还会记录已点击 Kimi 的论文，并按间隔重新触发这些论文的总结请求。总结内容和排队状态仍由 papers.cool 提供；如果上游还在排队，内容会在上游生成后才能显示，应用不缓存总结正文。
+
 **为什么要代理（`src-tauri/src/features/coolpapers/proxy.rs`）**
 
 papers.cool 给几乎所有链接都加了 `target="_blank"`（单个分区页实测 238 处）。直接跨源嵌套时：
@@ -240,6 +242,8 @@ papers.cool 给几乎所有链接都加了 `target="_blank"`（单个分区页�
 
 **主内容**：内嵌 iframe，经 `agentero-modelscope://localhost` 加载 [modelscope.cn/papers](https://modelscope.cn/papers)。顶条 chrome、拖拽护盾、Back / Forward 全部复用 `PlazaWebFrame`，前端只多了 `PLAZA_SOURCES` 一条。
 
+**浏览状态恢复**：重开面板时恢复 ModelScope 最近访问的论文路由、站内后退 / 前进历史，以及该路由下文档和 `.ms-page-container` 的滚动位置。路由由 umi 的 `pushState` 更新，因此滚动位置也在每次站内路由切换时分别保存。
+
 **必须代理**：站点回 `X-Frame-Options: SAMEORIGIN`，直接 iframe 会被拒。代理重建响应时只保留 `Content-Type`，XFO 顺带被丢掉。
 
 **与 Cool Papers 的四处不同（都因为它是 umi 3.5.26 SPA）**
@@ -342,7 +346,7 @@ DocTab：`kind: "plaza"`（或 `file` + mode `plaza` + path 虚拟 URI——实�
 | 站点改版 / 禁止嵌入 | 代理已丢弃 `X-Frame-Options`；仍失败则把该来源降级为 `embedOrigin: null` + 「系统浏览器打开」 |
 | ModelScope 换 API 形状或 header 类名 | 只依赖结构化钩子（`antd5-*`、`a[href^="/papers/"]`）；列表接口变了表现为空列表，代理无需改动 |
 | alicdn 资源的 CORS | `crossorigin="anonymous"` 的几个脚本需要上游回 `*`；被拦时兜底是在 `rewrite_html` 里去掉 `crossorigin`（无 `integrity`，降级为经典脚本） |
-| WebView 体积与内存 | 仅在对应 plaza panel 挂载；关 tab 销毁 |
+| WebView 体积与内存 | 仅在对应 plaza panel 挂载；关 tab 销毁；Cool Papers / ModelScope 重开时恢复站内历史与阅读位置，Cool Papers 另恢复已请求的 Kimi 总结 |
 | 推荐过冷启动 | 空态文案；阈值（如 &lt; 3 篇不估标签组） |
 
 **仍可再确认（非阻塞 P0a）**：
