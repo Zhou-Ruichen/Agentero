@@ -35,6 +35,71 @@ const NAV_BRIDGE: &str = r##"<style>
     };
     send();
     window.addEventListener("pageshow", send);
+    // Keep the page's reading position when its owning panel is unmounted.
+    // The proxy origin has a persistent WebView storage area across app runs.
+    var scrollKey =
+      "agentero-plaza:cool-papers:scroll:" + location.pathname + location.search;
+    var savedScroll = null;
+    try {
+      savedScroll = JSON.parse(localStorage.getItem(scrollKey) || "null");
+    } catch (e) {}
+    var writeScroll = function () {
+      try {
+        localStorage.setItem(
+          scrollKey,
+          JSON.stringify({ x: window.scrollX, y: window.scrollY })
+        );
+      } catch (e) {}
+    };
+    var saveTimer = 0;
+    var saveScroll = function () {
+      if (saveTimer) return;
+      saveTimer = window.setTimeout(function () {
+        saveTimer = 0;
+        writeScroll();
+      }, 250);
+    };
+    var flushScroll = function () {
+      if (saveTimer) window.clearTimeout(saveTimer);
+      saveTimer = 0;
+      writeScroll();
+    };
+    window.addEventListener("scroll", saveScroll, { passive: true });
+    window.addEventListener("pagehide", flushScroll);
+    if (savedScroll && typeof savedScroll.y === "number") {
+      // Try once after the document is ready, then retry only when the site's
+      // async paper list changes. This avoids polling and repeated sync writes.
+      var beginRestore = function () {
+        var observer = null;
+        var restorePending = false;
+        var deadline = window.setTimeout(function () {
+          if (observer) observer.disconnect();
+        }, 10000);
+        var restore = function () {
+          if (restorePending) return;
+          restorePending = true;
+          window.requestAnimationFrame(function () {
+            restorePending = false;
+            window.scrollTo(savedScroll.x || 0, savedScroll.y);
+            if (window.scrollY >= savedScroll.y - 2) {
+              window.clearTimeout(deadline);
+              if (observer) observer.disconnect();
+            }
+          });
+        };
+        var papers = document.querySelector(".papers");
+        if (papers && window.MutationObserver) {
+          observer = new MutationObserver(restore);
+          observer.observe(papers, { childList: true });
+        }
+        restore();
+      };
+      if (document.readyState === "loading") {
+        document.addEventListener("DOMContentLoaded", beginRestore, { once: true });
+      } else {
+        beginRestore();
+      }
+    }
     var isFeed = function (url) {
       return /\/feed\/?$/.test(url.pathname);
     };
@@ -95,6 +160,121 @@ const NAV_BRIDGE: &str = r##"<style>
     // (arxiv.org / OJS / OpenReview / ACL Anthology), which is what the
     // importer resolves. No href on our own anchor, so the interceptor
     // above ignores it.
+    // Kimi output is expanded inside a paper row, so it disappears when the
+    // panel's WebView is unmounted. Remember which papers were requested and
+    // replay those requests when their rows return. The site owns the summary
+    // cache/queue; we do not persist or inject rendered HTML.
+    var kimiStorageKey =
+      "agentero-plaza:cool-papers:kimi:" + location.pathname + location.search;
+    var kimiPaperIds = [];
+    var kimiRestoreQueue = [];
+    var kimiRestoreTimer = 0;
+    try {
+      var storedKimiIds = JSON.parse(localStorage.getItem(kimiStorageKey) || "[]");
+      if (Array.isArray(storedKimiIds)) {
+        kimiPaperIds = storedKimiIds
+          .filter(function (id) {
+            return typeof id === "string" && id.length > 0 && id.length <= 200;
+          })
+          .slice(-50);
+      }
+    } catch (e) {}
+    var saveKimiPaperIds = function () {
+      try {
+        localStorage.setItem(kimiStorageKey, JSON.stringify(kimiPaperIds));
+      } catch (e) {}
+    };
+    var actionText = function (action) {
+      return action.getAttribute("aria-label") || action.title || action.textContent || "";
+    };
+    var actionLabel = function (action) {
+      return actionText(action).replace(/[^a-z]/gi, "").toLowerCase();
+    };
+    var isKimiAction = function (action) {
+      return actionLabel(action) === "kimi";
+    };
+    var isCollapseAction = function (action) {
+      var label = actionText(action).toLowerCase();
+      return /collapse|hide|close|fold|收起|折叠|隐藏/.test(label);
+    };
+    var findKimiAction = function (panel) {
+      var actions = panel.querySelectorAll("a, button");
+      for (var i = 0; i < actions.length; i++) {
+        if (isKimiAction(actions[i])) return actions[i];
+      }
+      return null;
+    };
+    var rememberKimiPaper = function (id) {
+      if (kimiPaperIds.indexOf(id) < 0) {
+        kimiPaperIds.push(id);
+        kimiPaperIds = kimiPaperIds.slice(-50);
+        saveKimiPaperIds();
+      }
+    };
+    var forgetKimiPaper = function (id) {
+      var next = kimiPaperIds.filter(function (savedId) {
+        return savedId !== id;
+      });
+      if (next.length !== kimiPaperIds.length) {
+        kimiPaperIds = next;
+        saveKimiPaperIds();
+      }
+    };
+    var runKimiRestoreQueue = function () {
+      if (kimiRestoreTimer || kimiRestoreQueue.length === 0) return;
+      // Space requests out so restoring several summaries does not flood the
+      // upstream service or stall the embedded page in one burst.
+      kimiRestoreTimer = window.setTimeout(function () {
+        kimiRestoreTimer = 0;
+        var panel = kimiRestoreQueue.shift();
+        if (
+          panel &&
+          document.documentElement.contains(panel) &&
+          !panel.dataset.agenteroKimiRestoreCancelled &&
+          kimiPaperIds.indexOf(panel.id) >= 0
+        ) {
+          var action = findKimiAction(panel);
+          if (action) {
+            action.dataset.agenteroKimiRestore = "true";
+            action.click();
+            window.setTimeout(function () {
+              delete action.dataset.agenteroKimiRestore;
+            }, 0);
+          }
+        }
+        runKimiRestoreQueue();
+      }, 800);
+    };
+    var restoreKimiForPaper = function (panel) {
+      if (!panel || !panel.id || kimiPaperIds.indexOf(panel.id) < 0) return;
+      if (panel.dataset.agenteroKimiRestoreQueued) return;
+      if (!findKimiAction(panel)) return;
+      panel.dataset.agenteroKimiRestoreQueued = "true";
+      kimiRestoreQueue.push(panel);
+      runKimiRestoreQueue();
+    };
+    // Capture before the site's delegated click handler so we still remember
+    // the action if it stops propagation.
+    document.addEventListener(
+      "click",
+      function (event) {
+        var action = event.target && event.target.closest
+          ? event.target.closest("a, button")
+          : null;
+        var panel = action && action.closest ? action.closest(".panel.paper") : null;
+        if (!panel || !panel.id || action.dataset.agenteroKimiRestore === "true") return;
+        if (isKimiAction(action)) {
+          if (panel.dataset.agenteroKimiRestoreQueued) {
+            panel.dataset.agenteroKimiRestoreCancelled = "true";
+          }
+          rememberKimiPaper(panel.id);
+        } else if (isCollapseAction(action)) {
+          forgetKimiPaper(panel.id);
+        }
+      },
+      true
+    );
+
     var upstreamUrl = function (panel) {
       var index = panel.querySelector(".index");
       var anchor = index && index.closest ? index.closest("a[href]") : null;
@@ -106,7 +286,9 @@ const NAV_BRIDGE: &str = r##"<style>
       button.textContent = label;
     };
     var decorate = function (panel) {
-      if (!panel || panel.querySelector(".title-import")) return;
+      if (!panel) return;
+      restoreKimiForPaper(panel);
+      if (panel.querySelector(".title-import")) return;
       var title = panel.querySelector("h2.title");
       if (!title) return;
       var url = upstreamUrl(panel);

@@ -42,6 +42,11 @@ export function PlazaView({
 			<PlazaWebFrame
 				homeUrl={source.url}
 				embedOrigin={source.embedOrigin?.() ?? null}
+				lastPathStorageKey={
+					source.embedOrigin
+						? `agentero:plaza:${source.id}:last-path`
+						: undefined
+				}
 				title={plazaSourceLabel(source)}
 				className={className}
 			/>
